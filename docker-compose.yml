@@ -1,0 +1,59 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: drrgt
+      POSTGRES_PASSWORD: drrgt
+      POSTGRES_DB: drrgt
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drrgt"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file: .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/data
+
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    command: celery -A app.worker.celery_app.celery_app worker --beat -l info
+    env_file: .env
+    depends_on:
+      - api
+    volumes:
+      - ./data:/data
+
+  web:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_URL: http://localhost:8000
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+
+volumes:
+  pgdata: {}

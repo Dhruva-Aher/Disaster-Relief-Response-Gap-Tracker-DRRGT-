@@ -1,0 +1,22 @@
+[
+  {"fips": "12086", "name": "Miami-Dade County, Florida", "median_income": 57815, "population": 2716940},
+  {"fips": "12099", "name": "Palm Beach County, Florida", "median_income": 68728, "population": 1492191},
+  {"fips": "06037", "name": "Los Angeles County, California", "median_income": 80366, "population": 9829544},
+  {"fips": "06073", "name": "San Diego County, California", "median_income": 92578, "population": 3298634},
+  {"fips": "05031", "name": "Craighead County, Arkansas", "median_income": 52193, "population": 112002},
+  {"fips": "05045", "name": "Faulkner County, Arkansas", "median_income": 63127, "population": 126007},
+  {"fips": "15009", "name": "Maui County, Hawaii", "median_income": 88472, "population": 164754},
+  {"fips": "37021", "name": "Buncombe County, North Carolina", "median_income": 61330, "population": 273589},
+  {"fips": "37087", "name": "Haywood County, North Carolina", "median_income": 51840, "population": 62089},
+  {"fips": "37199", "name": "Yancey County, North Carolina", "median_income": 46257, "population": 18470},
+  {"fips": "37121", "name": "Mitchell County, North Carolina", "median_income": 44918, "population": 14903},
+  {"fips": "12057", "name": "Hillsborough County, Florida", "median_income": 70319, "population": 1513301},
+  {"fips": "12101", "name": "Pasco County, Florida", "median_income": 62537, "population": 584491},
+  {"fips": "48201", "name": "Harris County, Texas", "median_income": 67317, "population": 4835125},
+  {"fips": "22071", "name": "Orleans Parish, Louisiana", "median_income": 49814, "population": 376971},
+  {"fips": "36061", "name": "New York County, New York", "median_income": 99880, "population": 1629153},
+  {"fips": "17031", "name": "Cook County, Illinois", "median_income": 72121, "population": 5150233},
+  {"fips": "13089", "name": "DeKalb County, Georgia", "median_income": 71890, "population": 762820},
+  {"fips": "21195", "name": "Pike County, Kentucky", "median_income": 38571, "population": 57876},
+  {"fips": "54047", "name": "McDowell County, West Virginia", "median_income": 28500, "population": 17508}
+]

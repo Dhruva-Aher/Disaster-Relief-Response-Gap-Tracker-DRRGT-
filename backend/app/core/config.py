@@ -1,0 +1,23 @@
+"""Application configuration loaded from environment variables."""
+import os
+from functools import lru_cache
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    app_name: str = "Disaster Relief Response Gap Tracker"
+    database_url: str = os.getenv("DATABASE_URL", "postgresql+psycopg://drrgt:drrgt@db:5432/drrgt")
+    redis_url: str = os.getenv("REDIS_URL", "redis://redis:6379/0")
+    fema_base_url: str = "https://www.fema.gov/api/open"
+    census_api_key: str | None = os.getenv("CENSUS_API_KEY")
+    census_base_url: str = "https://api.census.gov/data"
+    cache_ttl_seconds: int = 3600
+    use_sample_data_fallback: bool = True
+
+    class Config:
+        env_file = ".env"
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()

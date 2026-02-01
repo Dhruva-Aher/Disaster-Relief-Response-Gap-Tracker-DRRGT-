@@ -1,0 +1,9 @@
+[
+  {"disasterNumber": "4673", "declarationTitle": "Hurricane Ian", "incidentType": "Hurricane", "declarationDate": "2022-09-29T00:00:00Z", "state": "FL"},
+  {"disasterNumber": "4683", "declarationTitle": "Severe Storms", "incidentType": "Severe Storm", "declarationDate": "2023-01-14T00:00:00Z", "state": "CA"},
+  {"disasterNumber": "4701", "declarationTitle": "Tornadoes", "incidentType": "Tornado", "declarationDate": "2023-04-01T00:00:00Z", "state": "AR"},
+  {"disasterNumber": "4724", "declarationTitle": "Maui Wildfires", "incidentType": "Fire", "declarationDate": "2023-08-10T00:00:00Z", "state": "HI"},
+  {"disasterNumber": "4749", "declarationTitle": "Hurricane Idalia", "incidentType": "Hurricane", "declarationDate": "2023-08-31T00:00:00Z", "state": "FL"},
+  {"disasterNumber": "4806", "declarationTitle": "Hurricane Helene", "incidentType": "Hurricane", "declarationDate": "2024-09-28T00:00:00Z", "state": "NC"},
+  {"disasterNumber": "4812", "declarationTitle": "Hurricane Milton", "incidentType": "Hurricane", "declarationDate": "2024-10-10T00:00:00Z", "state": "FL"}
+]

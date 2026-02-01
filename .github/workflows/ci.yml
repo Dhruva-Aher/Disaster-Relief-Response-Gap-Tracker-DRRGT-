@@ -1,0 +1,51 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  backend-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Install
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+      - name: Test
+        working-directory: backend
+        env: { PYTHONPATH: . }
+        run: pytest -q
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - working-directory: frontend
+        run: |
+          npm install
+          npm run build
+
+  docker-push:
+    needs: [backend-test, frontend-build]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+      - name: Build + push API
+        run: |
+          docker build -f backend/Dockerfile -t $REGISTRY/drrgt-api:${{ github.sha }} .
+          docker push $REGISTRY/drrgt-api:${{ github.sha }}
+        env:
+          REGISTRY: ${{ steps.ecr.outputs.registry }}
