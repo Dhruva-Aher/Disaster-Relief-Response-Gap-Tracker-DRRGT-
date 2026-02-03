@@ -1,24 +1,47 @@
 """FastAPI application exposing metrics, counties, correlations, timeseries, outliers."""
 import json
 import logging
+import time
 from functools import wraps
 from typing import Optional
+
 import redis
-from fastapi import FastAPI, Depends, Query, HTTPException
+from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+import app.core.logging as _log_cfg
 from app.core.config import get_settings
 from app.core.database import get_db, init_db
 from app.models.db import County, Disaster, Metric
 from app.services.analysis import income_gap_correlation
 
+_log_cfg.configure()
+log = logging.getLogger(__name__)
 settings = get_settings()
-logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title=settings.app_name, version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def _timing_middleware(request: Request, call_next) -> Response:
+    t0 = time.perf_counter()
+    response: Response = await call_next(request)
+    ms = (time.perf_counter() - t0) * 1000
+    response.headers["X-Response-Time-Ms"] = f"{ms:.1f}"
+    log.info(
+        "request",
+        extra={
+            "ctx_method": request.method,
+            "ctx_path": request.url.path,
+            "ctx_status": response.status_code,
+            "ctx_ms": round(ms, 1),
+        },
+    )
+    return response
+
 
 try:
     cache = redis.Redis.from_url(settings.redis_url, decode_responses=True)
