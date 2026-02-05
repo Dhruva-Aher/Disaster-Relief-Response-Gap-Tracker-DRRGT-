@@ -74,7 +74,40 @@ def _startup():
 
 @app.get("/health")
 def health():
+    """Shallow liveness probe — returns 200 if the process is running."""
     return {"status": "ok"}
+
+
+@app.get("/health/deep")
+def health_deep(db: Session = Depends(get_db)):
+    """
+    Deep readiness probe used by the ALB health check.
+
+    Returns 503 if PostgreSQL is unreachable so the load balancer stops
+    routing traffic to this container until the check recovers.
+    Redis unavailability degrades gracefully (cache miss on every request)
+    but is not treated as fatal.
+    """
+    from fastapi.responses import JSONResponse
+    checks: dict[str, str] = {}
+
+    try:
+        db.execute(text("SELECT 1"))
+        checks["db"] = "ok"
+    except Exception as exc:
+        checks["db"] = f"error: {exc}"
+        log.error("DB health check failed", extra={"ctx_err": str(exc)})
+
+    try:
+        checks["redis"] = "ok" if (cache and cache.ping()) else "unavailable"
+    except Exception as exc:
+        checks["redis"] = f"error: {exc}"
+
+    db_ok = checks.get("db") == "ok"
+    return JSONResponse(
+        {"status": "ok" if db_ok else "degraded", "checks": checks},
+        status_code=200 if db_ok else 503,
+    )
 
 
 @app.get("/metrics")
