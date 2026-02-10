@@ -1,11 +1,8 @@
 """FastAPI application exposing metrics, counties, correlations, timeseries, outliers."""
-import json
 import logging
 import time
-from functools import wraps
 from typing import Optional
 
-import redis
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
@@ -14,7 +11,8 @@ from sqlalchemy.orm import Session
 import app.core.logging as _log_cfg
 from app.core.config import get_settings
 from app.core.database import get_db, init_db
-from app.models.db import County, Disaster, Metric
+from app.models.db import County, Metric
+from app.services import cache as cache_svc
 from app.services.analysis import income_gap_correlation
 
 _log_cfg.configure()
@@ -43,33 +41,10 @@ async def _timing_middleware(request: Request, call_next) -> Response:
     return response
 
 
-try:
-    cache = redis.Redis.from_url(settings.redis_url, decode_responses=True)
-    cache.ping()
-except Exception:
-    cache = None
-
-
-def cached(key_fn):
-    def deco(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            if not cache:
-                return fn(*args, **kwargs)
-            key = key_fn(*args, **kwargs)
-            hit = cache.get(key)
-            if hit:
-                return json.loads(hit)
-            result = fn(*args, **kwargs)
-            cache.setex(key, settings.cache_ttl_seconds, json.dumps(result, default=str))
-            return result
-        return wrapper
-    return deco
-
-
 @app.on_event("startup")
 def _startup():
     init_db()
+    cache_svc.get_cache()
 
 
 @app.get("/health")
@@ -85,8 +60,6 @@ def health_deep(db: Session = Depends(get_db)):
 
     Returns 503 if PostgreSQL is unreachable so the load balancer stops
     routing traffic to this container until the check recovers.
-    Redis unavailability degrades gracefully (cache miss on every request)
-    but is not treated as fatal.
     """
     from fastapi.responses import JSONResponse
     checks: dict[str, str] = {}
@@ -99,7 +72,8 @@ def health_deep(db: Session = Depends(get_db)):
         log.error("DB health check failed", extra={"ctx_err": str(exc)})
 
     try:
-        checks["redis"] = "ok" if (cache and cache.ping()) else "unavailable"
+        c = cache_svc.get_cache()
+        checks["redis"] = "ok" if c else "unavailable"
     except Exception as exc:
         checks["redis"] = f"error: {exc}"
 
@@ -157,11 +131,19 @@ def counties(search: Optional[str] = None, state: Optional[str] = None,
 
 @app.get("/correlations")
 def correlations(db: Session = Depends(get_db)):
-    return income_gap_correlation(db)
+    hit = cache_svc.get("correlations")
+    if hit is not None:
+        return hit
+    result = income_gap_correlation(db)
+    cache_svc.set("correlations", result)
+    return result
 
 
 @app.get("/timeseries")
 def timeseries(db: Session = Depends(get_db)):
+    hit = cache_svc.get("timeseries")
+    if hit is not None:
+        return hit
     sql = text("""
         SELECT EXTRACT(YEAR FROM d.declaration_date)::int AS year,
                AVG(m.response_gap_days) AS avg_gap, COUNT(*) AS n
@@ -169,8 +151,10 @@ def timeseries(db: Session = Depends(get_db)):
         WHERE m.response_gap_days IS NOT NULL
         GROUP BY year ORDER BY year
     """)
-    return [{"year": r.year, "avg_gap": float(r.avg_gap or 0), "n": r.n}
-            for r in db.execute(sql).fetchall()]
+    result = [{"year": r.year, "avg_gap": round(float(r.avg_gap or 0), 1), "n": r.n}
+              for r in db.execute(sql).fetchall()]
+    cache_svc.set("timeseries", result)
+    return result
 
 
 @app.get("/outliers")
@@ -189,6 +173,9 @@ def outliers(top: int = 25, db: Session = Depends(get_db)):
 
 @app.get("/insights")
 def insights(db: Session = Depends(get_db)):
+    hit = cache_svc.get("insights")
+    if hit is not None:
+        return hit
     corr = income_gap_correlation(db)
     msgs = []
     if corr.get("pearson_r") is not None:
@@ -197,4 +184,6 @@ def insights(db: Session = Depends(get_db)):
     if corr.get("rural_mean_gap") and corr.get("urban_mean_gap"):
         diff = corr["rural_mean_gap"] - corr["urban_mean_gap"]
         msgs.append(f"Rural counties wait {diff:+.1f} days longer than urban counties on average.")
-    return {"stats": corr, "insights": msgs}
+    result = {"stats": corr, "insights": msgs}
+    cache_svc.set("insights", result)
+    return result

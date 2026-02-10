@@ -12,6 +12,8 @@ class Settings(BaseSettings):
     census_api_key: str | None = os.getenv("CENSUS_API_KEY")
     census_base_url: str = "https://api.census.gov/data"
     cache_ttl_seconds: int = 3600
+    # Bump to invalidate all versioned cache keys without a separate flush
+    cache_version: str = "v1"
     use_sample_data_fallback: bool = True
 
     class Config:
