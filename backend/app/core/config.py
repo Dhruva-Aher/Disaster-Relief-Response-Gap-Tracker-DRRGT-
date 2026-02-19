@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     # Bump to invalidate all versioned cache keys without a separate flush
     cache_version: str = "v1"
     use_sample_data_fallback: bool = True
+    # S3 bucket for raw FEMA/Census snapshots; leave empty to skip archival
+    raw_bucket: str | None = os.getenv("RAW_BUCKET")
 
     class Config:
         env_file = ".env"
