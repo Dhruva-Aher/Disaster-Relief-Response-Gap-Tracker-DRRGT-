@@ -6,6 +6,7 @@ from sqlalchemy import text, delete
 from app.core.database import SessionLocal, init_db
 from app.models.db import County, Disaster, Disbursement, Metric
 from app.etl.ingest import fetch_fema, fetch_census
+from app.services.cache import invalidate_analytics
 
 log = logging.getLogger(__name__)
 
@@ -224,6 +225,10 @@ def run_pipeline():
 
         log.info("Step 4/4 — computing metrics…")
         compute_metrics(db)
+
+        # Bust cached analytics so the next HTTP request recomputes from
+        # the fresh database state instead of serving yesterday's results.
+        invalidate_analytics()
 
         log.info("Pipeline complete ✓")
     finally:
