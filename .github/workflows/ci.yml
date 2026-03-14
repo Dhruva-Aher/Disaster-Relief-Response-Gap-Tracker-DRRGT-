@@ -1,51 +1,181 @@
-name: CI
+name: CI/CD
+
 on:
-  push: { branches: [main] }
+  push:
+    branches: [main]
   pull_request:
+
+env:
+  AWS_REGION:          us-east-1
+  ECR_REPOSITORY:      drrgt-api
+  ECS_CLUSTER:         drrgt-cluster
+  ECS_SERVICE_API:     drrgt-api
+  ECS_SERVICE_WORKER:  drrgt-worker
+  TASK_FAMILY_API:     drrgt-api
+  TASK_FAMILY_WORKER:  drrgt-worker
+  CONTAINER_NAME:      api
+
 jobs:
-  backend-test:
+  # ── Tests ───────────────────────────────────────────────────────────────────
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
-      - name: Install
-        working-directory: backend
-        run: |
-          pip install -r requirements.txt
-          pip install pytest
-      - name: Test
-        working-directory: backend
-        env: { PYTHONPATH: . }
-        run: pytest -q
 
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt pytest
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          PYTHONPATH: .
+          DATABASE_URL: "sqlite:///./test_drrgt.db"
+          USE_SAMPLE_DATA_FALLBACK: "true"
+        run: pytest -q --tb=short
+
+  # ── Frontend build check ─────────────────────────────────────────────────
   frontend-build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with: { node-version: "20" }
-      - working-directory: frontend
-        run: |
-          npm install
-          npm run build
 
-  docker-push:
-    needs: [backend-test, frontend-build]
+      - name: Build frontend
+        working-directory: frontend
+        run: npm install && npm run build
+
+  # ── Build + push image + deploy to ECS ───────────────────────────────────
+  # Runs only on main branch pushes, only if both test jobs pass.
+  # Strategy:
+  #   1. Build image tagged with the commit SHA (immutable tag = traceable).
+  #   2. Push to ECR.
+  #   3. For each service (API, Worker):
+  #      a. Fetch current task definition.
+  #      b. Strip read-only ECS fields.
+  #      c. Swap the container image to the new SHA.
+  #      d. Register as a new task definition revision.
+  #      e. Update the ECS service to use that revision.
+  #   4. Wait for the API service to stabilise (health check gate).
+  #      If the new container fails /health/deep, ECS keeps the old task
+  #      running and this step times out → GitHub Action fails → alert.
+  #   We do NOT wait on the Worker service because Celery+Beat has no ALB
+  #   health check; ECS will report it stable as soon as the task starts.
+
+  deploy:
+    needs: [test, frontend-build]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
-      - uses: aws-actions/configure-aws-credentials@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-      - uses: aws-actions/amazon-ecr-login@v2
-        id: ecr
-      - name: Build + push API
-        run: |
-          docker build -f backend/Dockerfile -t $REGISTRY/drrgt-api:${{ github.sha }} .
-          docker push $REGISTRY/drrgt-api:${{ github.sha }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      # ── Build and push ──────────────────────────────────────────────────
+      - name: Build and push Docker image
+        id: build
         env:
-          REGISTRY: ${{ steps.ecr.outputs.registry }}
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          IMAGE="$REGISTRY/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+          docker build -f backend/Dockerfile -t "$IMAGE" .
+          docker push "$IMAGE"
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      # ── Deploy API service ──────────────────────────────────────────────
+      - name: Deploy API service
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          # Fetch current task definition and strip ECS-managed read-only fields
+          # before re-registering. These fields are rejected by register-task-definition.
+          NEW_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${{ env.TASK_FAMILY_API }}" \
+            --query "taskDefinition" \
+            --output json \
+          | python3 - <<'PYEOF'
+          import json, sys
+          td = json.load(sys.stdin)
+          for key in [
+            "taskDefinitionArn", "revision", "status", "requiresAttributes",
+            "placementConstraints", "compatibilities", "registeredAt", "registeredBy",
+          ]:
+              td.pop(key, None)
+          # Update only the container named "api" to avoid clobbering sidecars
+          for c in td["containerDefinitions"]:
+              if c["name"] == "api":
+                  import os
+                  c["image"] = os.environ["IMAGE"]
+          print(json.dumps(td))
+          PYEOF
+          )
+
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+          echo "Registered task definition: $NEW_ARN"
+
+          aws ecs update-service \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --service  "${{ env.ECS_SERVICE_API }}" \
+            --task-definition "$NEW_ARN"
+
+          echo "Waiting for API service to stabilise..."
+          aws ecs wait services-stable \
+            --cluster  "${{ env.ECS_CLUSTER }}" \
+            --services "${{ env.ECS_SERVICE_API }}"
+          echo "API deployment complete: $NEW_ARN"
+
+      # ── Deploy Worker service ───────────────────────────────────────────
+      # Worker uses the same image but different task family.
+      # We do not wait for worker stability — Celery has no readiness concept.
+      - name: Deploy Worker service
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+        run: |
+          NEW_TASK_DEF=$(aws ecs describe-task-definition \
+            --task-definition "${{ env.TASK_FAMILY_WORKER }}" \
+            --query "taskDefinition" \
+            --output json \
+          | python3 - <<'PYEOF'
+          import json, sys, os
+          td = json.load(sys.stdin)
+          for key in [
+            "taskDefinitionArn", "revision", "status", "requiresAttributes",
+            "placementConstraints", "compatibilities", "registeredAt", "registeredBy",
+          ]:
+              td.pop(key, None)
+          for c in td["containerDefinitions"]:
+              if c["name"] == "worker":
+                  c["image"] = os.environ["IMAGE"]
+          print(json.dumps(td))
+          PYEOF
+          )
+
+          NEW_ARN=$(aws ecs register-task-definition \
+            --cli-input-json "$NEW_TASK_DEF" \
+            --query "taskDefinition.taskDefinitionArn" \
+            --output text)
+
+          aws ecs update-service \
+            --cluster "${{ env.ECS_CLUSTER }}" \
+            --service  "${{ env.ECS_SERVICE_WORKER }}" \
+            --task-definition "$NEW_ARN"
+
+          echo "Worker updated: $NEW_ARN"
