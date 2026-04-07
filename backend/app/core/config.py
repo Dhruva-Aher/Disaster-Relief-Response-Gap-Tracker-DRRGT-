@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     use_sample_data_fallback: bool = True
     # S3 bucket for raw FEMA/Census snapshots; leave empty to skip archival
     raw_bucket: str | None = os.getenv("RAW_BUCKET")
+    # SQLAlchemy connection pool — sized for a Fargate 512 CPU task
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_timeout: int = 30
 
     class Config:
         env_file = ".env"
