@@ -178,9 +178,10 @@ def insights(db: Session = Depends(get_db)):
         return hit
     corr = income_gap_correlation(db)
     msgs = []
-    if corr.get("pearson_r") is not None:
-        direction = "faster" if corr["pearson_r"] < 0 else "slower"
-        msgs.append(f"Higher-income counties receive aid {direction} on average (r={corr['pearson_r']:.2f}).")
+    r = corr.get("spearman_r")
+    if r is not None:
+        direction = "faster" if r < 0 else "slower"
+        msgs.append(f"Higher-income counties receive aid {direction} on average (Spearman ρ={r:.3f}, p={corr.get('p_value', '?')}).")
     if corr.get("rural_mean_gap") and corr.get("urban_mean_gap"):
         diff = corr["rural_mean_gap"] - corr["urban_mean_gap"]
         msgs.append(f"Rural counties wait {diff:+.1f} days longer than urban counties on average.")
