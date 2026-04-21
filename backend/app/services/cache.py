@@ -80,7 +80,7 @@ def invalidate(*keys: str) -> None:
 
 
 # Keys for all analytics endpoints — invalidated together after each ETL run
-ANALYTICS_KEYS = ["correlations", "timeseries", "insights"]
+ANALYTICS_KEYS = ["correlations", "timeseries", "insights", "quintiles"]
 
 
 def invalidate_analytics() -> None:

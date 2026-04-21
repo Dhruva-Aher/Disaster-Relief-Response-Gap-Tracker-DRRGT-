@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.database import get_db, init_db
 from app.models.db import County, Metric
 from app.services import cache as cache_svc
-from app.services.analysis import income_gap_correlation
+from app.services.analysis import income_gap_correlation, income_quintile_analysis
 
 _log_cfg.configure()
 log = logging.getLogger(__name__)
@@ -154,6 +154,17 @@ def timeseries(db: Session = Depends(get_db)):
     result = [{"year": r.year, "avg_gap": round(float(r.avg_gap or 0), 1), "n": r.n}
               for r in db.execute(sql).fetchall()]
     cache_svc.set("timeseries", result)
+    return result
+
+
+@app.get("/analytics/quintiles")
+def quintiles(db: Session = Depends(get_db)):
+    """Income quintile breakdown of average response gap."""
+    hit = cache_svc.get("quintiles")
+    if hit is not None:
+        return hit
+    result = income_quintile_analysis(db)
+    cache_svc.set("quintiles", result)
     return result
 
 

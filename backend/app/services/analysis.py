@@ -64,3 +64,33 @@ def income_gap_correlation(db: Session) -> dict:
         "mann_whitney_u":  float(mw_stat) if mw_stat is not None else None,
         "mann_whitney_p":  round(float(mw_p), 6) if mw_p is not None else None,
     }
+
+
+def income_quintile_analysis(db: Session) -> list[dict]:
+    df = _load_base(db)
+    d = df.dropna(subset=["median_income", "response_gap_days"]).copy()
+    d = d[d["response_gap_days"].between(0, 730)]
+    if len(d) < 10:
+        return []
+
+    try:
+        d["quintile"] = pd.qcut(d["median_income"], q=5,
+                                labels=["Q1 (lowest)", "Q2", "Q3", "Q4", "Q5 (highest)"])
+    except ValueError:
+        return []
+
+    out = []
+    for label, group in d.groupby("quintile", observed=True):
+        gap = group["response_gap_days"]
+        income = group["median_income"]
+        out.append({
+            "quintile":        str(label),
+            "n":               int(len(group)),
+            "median_gap_days": round(float(gap.median()), 1),
+            "mean_gap_days":   round(float(gap.mean()), 1),
+            "p25_gap":         round(float(gap.quantile(0.25)), 1),
+            "p75_gap":         round(float(gap.quantile(0.75)), 1),
+            "median_income":   round(float(income.median()), 0),
+            "pct_rural":       round(float(group["is_rural"].mean()) * 100, 1),
+        })
+    return out
