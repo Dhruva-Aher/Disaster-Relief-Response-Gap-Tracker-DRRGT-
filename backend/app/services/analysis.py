@@ -94,3 +94,51 @@ def income_quintile_analysis(db: Session) -> list[dict]:
             "pct_rural":       round(float(group["is_rural"].mean()) * 100, 1),
         })
     return out
+
+
+def underserved_counties(db: Session, top_n: int = 25) -> list[dict]:
+    """
+    Composite underserved score = 0.50*z(gap) + 0.30*z(-income) + 0.20*rural.
+
+    A high score means: long wait for aid AND low income AND likely rural —
+    the triple disadvantage that raw gap rankings miss.
+    """
+    sql = text("""
+        SELECT m.county_fips, c.name, c.state,
+               AVG(m.response_gap_days)   AS avg_gap,
+               c.median_income, c.is_rural, c.population
+        FROM metrics m JOIN counties c ON c.fips = m.county_fips
+        WHERE m.response_gap_days BETWEEN 0 AND 730
+          AND c.median_income IS NOT NULL
+        GROUP BY m.county_fips, c.name, c.state, c.median_income, c.is_rural, c.population
+    """)
+    result = db.execute(sql)
+    df = pd.DataFrame(result.fetchall(), columns=result.keys())
+
+    if len(df) < 10:
+        return []
+
+    def _zscore(s: pd.Series) -> pd.Series:
+        std = s.std()
+        return (s - s.mean()) / std if std > 0 else pd.Series(0.0, index=s.index)
+
+    df["score"] = (
+        0.50 * _zscore(df["avg_gap"])
+        + 0.30 * _zscore(-df["median_income"])
+        + 0.20 * df["is_rural"].astype(float)
+    )
+
+    top = df.nlargest(top_n, "score")
+    return [
+        {
+            "county_fips":    r.county_fips,
+            "county_name":    r.name,
+            "state":          r.state,
+            "avg_gap_days":   round(float(r.avg_gap), 1),
+            "median_income":  int(r.median_income),
+            "is_rural":       bool(r.is_rural),
+            "population":     int(r.population) if r.population else None,
+            "underserved_score": round(float(r.score), 4),
+        }
+        for r in top.itertuples()
+    ]

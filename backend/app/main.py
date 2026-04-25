@@ -13,7 +13,7 @@ from app.core.config import get_settings
 from app.core.database import get_db, init_db
 from app.models.db import County, Metric
 from app.services import cache as cache_svc
-from app.services.analysis import income_gap_correlation, income_quintile_analysis
+from app.services.analysis import income_gap_correlation, income_quintile_analysis, underserved_counties
 
 _log_cfg.configure()
 log = logging.getLogger(__name__)
@@ -165,6 +165,18 @@ def quintiles(db: Session = Depends(get_db)):
         return hit
     result = income_quintile_analysis(db)
     cache_svc.set("quintiles", result)
+    return result
+
+
+@app.get("/analytics/underserved")
+def underserved(top: int = Query(25, le=100), db: Session = Depends(get_db)):
+    """Counties with the highest composite underserved score."""
+    key = f"underserved:{top}"
+    hit = cache_svc.get(key)
+    if hit is not None:
+        return hit
+    result = underserved_counties(db, top_n=top)
+    cache_svc.set(key, result)
     return result
 
 
