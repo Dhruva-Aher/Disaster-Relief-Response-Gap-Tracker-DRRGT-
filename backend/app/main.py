@@ -13,7 +13,13 @@ from app.core.config import get_settings
 from app.core.database import get_db, init_db
 from app.models.db import County, Metric
 from app.services import cache as cache_svc
-from app.services.analysis import income_gap_correlation, income_quintile_analysis, underserved_counties
+from app.services.analysis import (
+    income_gap_correlation,
+    income_quintile_analysis,
+    disaster_type_analysis,
+    regional_equity_analysis,
+    underserved_counties,
+)
 
 _log_cfg.configure()
 log = logging.getLogger(__name__)
@@ -165,6 +171,28 @@ def quintiles(db: Session = Depends(get_db)):
         return hit
     result = income_quintile_analysis(db)
     cache_svc.set("quintiles", result)
+    return result
+
+
+@app.get("/analytics/disaster-types")
+def disaster_types(db: Session = Depends(get_db)):
+    """Median response gap stratified by FEMA incident type."""
+    hit = cache_svc.get("disaster_types")
+    if hit is not None:
+        return hit
+    result = disaster_type_analysis(db)
+    cache_svc.set("disaster_types", result)
+    return result
+
+
+@app.get("/analytics/regional")
+def regional(db: Session = Depends(get_db)):
+    """Average gap and income by FEMA administrative region."""
+    hit = cache_svc.get("regional")
+    if hit is not None:
+        return hit
+    result = regional_equity_analysis(db)
+    cache_svc.set("regional", result)
     return result
 
 

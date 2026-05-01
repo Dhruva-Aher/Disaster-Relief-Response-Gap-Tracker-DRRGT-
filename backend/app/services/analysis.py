@@ -5,6 +5,20 @@ from scipy import stats
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+# FEMA administrative regions (state FIPS prefix → region number)
+_FEMA_REGION: dict[str, int] = {
+    "09": 1, "23": 1, "25": 1, "33": 1, "44": 1, "50": 1,
+    "34": 2, "36": 2, "72": 2, "78": 2,
+    "10": 3, "11": 3, "24": 3, "42": 3, "51": 3, "54": 3,
+    "01": 4, "12": 4, "13": 4, "21": 4, "28": 4, "37": 4, "45": 4, "47": 4,
+    "17": 5, "18": 5, "26": 5, "27": 5, "39": 5, "55": 5,
+    "05": 6, "22": 6, "35": 6, "40": 6, "48": 6,
+    "19": 7, "20": 7, "29": 7, "31": 7,
+    "08": 8, "30": 8, "38": 8, "46": 8, "49": 8, "56": 8,
+    "04": 9, "06": 9, "15": 9, "32": 9,
+    "02": 10, "16": 10, "41": 10, "53": 10,
+}
+
 
 def _load_base(db: Session) -> pd.DataFrame:
     sql = text("""
@@ -94,6 +108,68 @@ def income_quintile_analysis(db: Session) -> list[dict]:
             "pct_rural":       round(float(group["is_rural"].mean()) * 100, 1),
         })
     return out
+
+
+def disaster_type_analysis(db: Session) -> list[dict]:
+    sql = text("""
+        SELECT dis.incident_type, m.response_gap_days, c.is_rural
+        FROM metrics m
+        JOIN disasters dis ON dis.id = m.disaster_id
+        JOIN counties  c   ON c.fips = m.county_fips
+        WHERE m.response_gap_days BETWEEN 0 AND 730
+          AND dis.incident_type IS NOT NULL
+    """)
+    result = db.execute(sql)
+    df = pd.DataFrame(result.fetchall(), columns=result.keys())
+    if df.empty:
+        return []
+
+    out = []
+    for dtype, grp in df.groupby("incident_type"):
+        gap = grp["response_gap_days"]
+        rural_gap  = grp[grp["is_rural"] == True]["response_gap_days"]
+        urban_gap  = grp[grp["is_rural"] == False]["response_gap_days"]
+        out.append({
+            "incident_type":    str(dtype),
+            "n":                int(len(grp)),
+            "median_gap_days":  round(float(gap.median()), 1),
+            "mean_gap_days":    round(float(gap.mean()), 1),
+            "rural_median_gap": round(float(rural_gap.median()), 1) if not rural_gap.empty else None,
+            "urban_median_gap": round(float(urban_gap.median()), 1) if not urban_gap.empty else None,
+        })
+    return sorted(out, key=lambda x: x["n"], reverse=True)
+
+
+def regional_equity_analysis(db: Session) -> list[dict]:
+    sql = text("""
+        SELECT c.state, AVG(m.response_gap_days) AS avg_gap,
+               AVG(c.median_income) AS avg_income,
+               AVG(c.is_rural::int) AS pct_rural, COUNT(*) AS n
+        FROM metrics m JOIN counties c ON c.fips = m.county_fips
+        WHERE m.response_gap_days BETWEEN 0 AND 730
+          AND c.state IS NOT NULL
+        GROUP BY c.state
+    """)
+    result = db.execute(sql)
+    df = pd.DataFrame(result.fetchall(), columns=result.keys())
+    if df.empty:
+        return []
+
+    df["fema_region"] = df["state"].map(_FEMA_REGION)
+
+    out = []
+    for region, grp in df.groupby("fema_region"):
+        if pd.isna(region):
+            continue
+        out.append({
+            "fema_region":    int(region),
+            "states":         sorted(grp["state"].tolist()),
+            "n":              int(grp["n"].sum()),
+            "avg_gap_days":   round(float((grp["avg_gap"] * grp["n"]).sum() / grp["n"].sum()), 1),
+            "avg_income":     round(float((grp["avg_income"] * grp["n"]).sum() / grp["n"].sum()), 0),
+            "pct_rural":      round(float((grp["pct_rural"] * grp["n"]).sum() / grp["n"].sum()) * 100, 1),
+        })
+    return sorted(out, key=lambda x: x["fema_region"])
 
 
 def underserved_counties(db: Session, top_n: int = 25) -> list[dict]:
