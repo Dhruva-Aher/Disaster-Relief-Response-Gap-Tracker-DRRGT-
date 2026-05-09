@@ -218,3 +218,86 @@ def underserved_counties(db: Session, top_n: int = 25) -> list[dict]:
         }
         for r in top.itertuples()
     ]
+
+
+def temporal_trends(db: Session) -> list[dict]:
+    sql = text("""
+        SELECT EXTRACT(YEAR FROM d.declaration_date)::int AS year,
+               AVG(m.response_gap_days)                   AS avg_gap,
+               PERCENTILE_CONT(0.5) WITHIN GROUP
+                   (ORDER BY m.response_gap_days)         AS median_gap,
+               COUNT(*)                                   AS n,
+               AVG(CASE WHEN c.is_rural THEN m.response_gap_days END)  AS rural_avg,
+               AVG(CASE WHEN NOT c.is_rural THEN m.response_gap_days END) AS urban_avg
+        FROM metrics m
+        JOIN disasters d ON d.id = m.disaster_id
+        JOIN counties  c ON c.fips = m.county_fips
+        WHERE m.response_gap_days BETWEEN 0 AND 730
+          AND d.declaration_date IS NOT NULL
+        GROUP BY year
+        ORDER BY year
+    """)
+    result = db.execute(sql)
+    rows = result.fetchall()
+    return [
+        {
+            "year":       int(r.year),
+            "n":          int(r.n),
+            "avg_gap":    round(float(r.avg_gap or 0), 1),
+            "median_gap": round(float(r.median_gap or 0), 1),
+            "rural_avg":  round(float(r.rural_avg), 1) if r.rural_avg is not None else None,
+            "urban_avg":  round(float(r.urban_avg), 1) if r.urban_avg is not None else None,
+        }
+        for r in rows
+    ]
+
+
+def multivariable_gap_model(db: Session) -> dict:
+    from sklearn.linear_model import Ridge
+    from sklearn.preprocessing import StandardScaler
+
+    sql = text("""
+        SELECT m.response_gap_days, c.median_income, c.is_rural,
+               c.state, dis.incident_type,
+               COUNT(m2.disaster_id) AS disaster_count
+        FROM metrics m
+        JOIN counties  c   ON c.fips = m.county_fips
+        JOIN disasters dis ON dis.id = m.disaster_id
+        LEFT JOIN disbursements m2 ON m2.disaster_id = m.disaster_id
+        WHERE m.response_gap_days BETWEEN 0 AND 730
+          AND c.median_income IS NOT NULL
+        GROUP BY m.response_gap_days, c.median_income, c.is_rural,
+                 c.state, dis.incident_type
+    """)
+    result = db.execute(sql)
+    df = pd.DataFrame(result.fetchall(), columns=result.keys())
+
+    if len(df) < 20:
+        return {"n": 0, "r2": None, "coefficients": {}}
+
+    df["log_income"] = np.log1p(df["median_income"].clip(lower=1))
+    df["is_rural"]   = df["is_rural"].astype(float)
+    df["fema_region"] = df["state"].map(_FEMA_REGION).fillna(0).astype(int)
+
+    # One-hot encode FEMA region (drop first to avoid multicollinearity)
+    region_dummies = pd.get_dummies(df["fema_region"], prefix="region", drop_first=True)
+    X = pd.concat([df[["log_income", "is_rural"]], region_dummies], axis=1).astype(float)
+    y = np.log1p(df["response_gap_days"].clip(lower=0))
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    model = Ridge(alpha=1.0)
+    model.fit(X_scaled, y)
+
+    r2 = float(model.score(X_scaled, y))
+    coef = {name: round(float(c), 4) for name, c in zip(X.columns, model.coef_)}
+
+    return {
+        "n":            int(len(df)),
+        "r2":           round(r2, 4),
+        "target":       "log(response_gap_days + 1)",
+        "features":     list(X.columns),
+        "coefficients": coef,
+        "note":         "Coefficients on standardised features; negative = faster aid.",
+    }

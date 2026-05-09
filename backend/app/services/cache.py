@@ -83,6 +83,7 @@ def invalidate(*keys: str) -> None:
 ANALYTICS_KEYS = [
     "correlations", "timeseries", "insights",
     "quintiles", "disaster_types", "regional", "underserved:25",
+    "trends", "model",
 ]
 
 

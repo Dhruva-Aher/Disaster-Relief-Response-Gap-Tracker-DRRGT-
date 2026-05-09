@@ -19,6 +19,8 @@ from app.services.analysis import (
     disaster_type_analysis,
     regional_equity_analysis,
     underserved_counties,
+    temporal_trends,
+    multivariable_gap_model,
 )
 
 _log_cfg.configure()
@@ -205,6 +207,28 @@ def underserved(top: int = Query(25, le=100), db: Session = Depends(get_db)):
         return hit
     result = underserved_counties(db, top_n=top)
     cache_svc.set(key, result)
+    return result
+
+
+@app.get("/analytics/trends")
+def trends(db: Session = Depends(get_db)):
+    """Year-over-year response gap trends with rural/urban split."""
+    hit = cache_svc.get("trends")
+    if hit is not None:
+        return hit
+    result = temporal_trends(db)
+    cache_svc.set("trends", result)
+    return result
+
+
+@app.get("/analytics/model")
+def gap_model(db: Session = Depends(get_db)):
+    """Ridge regression model of log(response_gap) on income, rurality, and FEMA region."""
+    hit = cache_svc.get("model")
+    if hit is not None:
+        return hit
+    result = multivariable_gap_model(db)
+    cache_svc.set("model", result)
     return result
 
 
