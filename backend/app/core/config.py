@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_timeout: int = 30
+    # Redis-backed rate limits (requests per 60-second window, per IP)
+    rate_limit_standard:  int = 60   # /metrics, /counties, /correlations, etc.
+    rate_limit_analytics: int = 10   # /analytics/* — expensive even when cached
 
     class Config:
         env_file = ".env"

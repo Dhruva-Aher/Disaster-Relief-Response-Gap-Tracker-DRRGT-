@@ -5,6 +5,7 @@ from typing import Optional
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -29,6 +30,58 @@ settings = get_settings()
 
 app = FastAPI(title=settings.app_name, version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Rate-limit middleware is registered BEFORE timing so that timing remains the
+# outermost layer and logs every response — including 429s — with a status code.
+#
+# Algorithm: Redis fixed-window counter (INCR + EXPIRE on first hit).
+# Tradeoff vs sliding window: a client can burst 2× the limit across a window
+# boundary. Acceptable here — the analytics endpoints are the main concern and
+# even a 2× burst (20 req) still can't meaningfully abuse a cached endpoint.
+# Fail-open: if Redis is unavailable, requests pass through rather than blocking
+# legitimate traffic.
+@app.middleware("http")
+async def _rate_limit_middleware(request: Request, call_next) -> Response:
+    path = request.url.path
+    # Health probes and API docs are never rate-limited.
+    if path.startswith("/health") or path in ("/docs", "/redoc", "/openapi.json"):
+        return await call_next(request)
+
+    ip    = request.client.host if request.client else "unknown"
+    is_analytics = path.startswith("/analytics/")
+    limit  = settings.rate_limit_analytics if is_analytics else settings.rate_limit_standard
+    window = 60
+    key    = f"rl:{'analytics' if is_analytics else 'api'}:{ip}"
+
+    c = cache_svc.get_cache()
+    if c:
+        try:
+            count = c.incr(key)
+            if count == 1:
+                c.expire(key, window)
+            if count > limit:
+                log.warning(
+                    "rate limit exceeded",
+                    extra={
+                        "ctx_ip": ip,
+                        "ctx_path": path,
+                        "ctx_count": count,
+                        "ctx_limit": limit,
+                    },
+                )
+                return JSONResponse(
+                    {"detail": "Rate limit exceeded. Please slow down."},
+                    status_code=429,
+                    headers={
+                        "Retry-After": str(window),
+                        "X-RateLimit-Limit": str(limit),
+                        "X-RateLimit-Window": f"{window}s",
+                    },
+                )
+        except Exception as exc:
+            log.warning("rate limiter error — failing open", extra={"ctx_err": str(exc)})
+
+    return await call_next(request)
 
 
 @app.middleware("http")
