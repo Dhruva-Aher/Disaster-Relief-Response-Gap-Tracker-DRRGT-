@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Redis-backed rate limits (requests per 60-second window, per IP)
     rate_limit_standard:  int = 60   # /metrics, /counties, /correlations, etc.
     rate_limit_analytics: int = 10   # /analytics/* — expensive even when cached
+    # PostgreSQL statement timeout — kills queries that run longer than this.
+    # Prevents a single slow scan from holding a connection for minutes.
+    db_statement_timeout_ms: int = 5000
 
     class Config:
         env_file = ".env"

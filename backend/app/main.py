@@ -4,6 +4,7 @@ import time
 from typing import Optional
 
 from fastapi import Depends, FastAPI, Query, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -102,6 +103,21 @@ async def _timing_middleware(request: Request, call_next) -> Response:
     return response
 
 
+@app.exception_handler(RequestValidationError)
+async def _validation_error_handler(request: Request, exc: RequestValidationError):
+    """Log validation failures so we can spot probing / malformed client bugs."""
+    log.warning(
+        "request validation failed",
+        extra={
+            "ctx_path":   request.url.path,
+            "ctx_method": request.method,
+            "ctx_ip":     request.client.host if request.client else "unknown",
+            "ctx_errors": str(exc.errors()),
+        },
+    )
+    return JSONResponse({"detail": exc.errors()}, status_code=422)
+
+
 @app.on_event("startup")
 def _startup():
     init_db()
@@ -176,7 +192,7 @@ def metrics(
 
 @app.get("/counties")
 def counties(search: Optional[str] = None, state: Optional[str] = None,
-             limit: int = 100, db: Session = Depends(get_db)):
+             limit: int = Query(100, ge=1, le=500), db: Session = Depends(get_db)):
     q = db.query(County)
     if search:
         q = q.filter(County.name.ilike(f"%{search}%"))
@@ -286,7 +302,7 @@ def gap_model(db: Session = Depends(get_db)):
 
 
 @app.get("/outliers")
-def outliers(top: int = 25, db: Session = Depends(get_db)):
+def outliers(top: int = Query(25, ge=1, le=100), db: Session = Depends(get_db)):
     rows = (db.query(Metric, County)
               .join(County, County.fips == Metric.county_fips)
               .order_by(Metric.response_gap_days.desc().nullslast())
