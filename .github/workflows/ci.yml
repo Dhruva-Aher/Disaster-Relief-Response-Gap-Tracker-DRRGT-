@@ -1,5 +1,11 @@
 name: CI/CD
 
+# Minimal permissions at workflow level — jobs that need more declare it explicitly.
+# This prevents a compromised step from writing to the repo or calling APIs it
+# shouldn't touch.
+permissions:
+  contents: read
+
 on:
   push:
     branches: [main]
@@ -20,9 +26,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to SHA rather than mutable tag so a compromised upstream release
+      # (e.g. actions/checkout@v4 being hijacked) can't silently inject code.
+      # Update pins periodically with Dependabot or manual review.
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683        # v4.2.2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b    # v5.3.0
         with: { python-version: "3.12" }
 
       - name: Install dependencies
@@ -41,9 +50,9 @@ jobs:
   frontend-build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683        # v4.2.2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af      # v4.1.0
         with: { node-version: "20" }
 
       - name: Build frontend
@@ -62,21 +71,21 @@ jobs:
   #      d. Register as a new task definition revision.
   #      e. Update the ECS service to use that revision.
   #   4. Wait for the API service to stabilise (health check gate).
-  #      If the new container fails /health/deep, ECS keeps the old task
-  #      running and this step times out → GitHub Action fails → alert.
-  #   We do NOT wait on the Worker service because Celery+Beat has no ALB
-  #   health check; ECS will report it stable as soon as the task starts.
 
   deploy:
     needs: [test, frontend-build]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    # Deploy needs to write to ECR and update ECS — declare explicitly.
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683        # v4.2.2
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502  # v4.0.2
         with:
           aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -84,7 +93,7 @@ jobs:
 
       - name: Login to ECR
         id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
+        uses: aws-actions/amazon-ecr-login@062b19f1513f52c2e74bfd30f79f11e9caba3bde    # v2.0.1
 
       # ── Build and push ──────────────────────────────────────────────────
       - name: Build and push Docker image
@@ -102,8 +111,6 @@ jobs:
         env:
           IMAGE: ${{ steps.build.outputs.image }}
         run: |
-          # Fetch current task definition and strip ECS-managed read-only fields
-          # before re-registering. These fields are rejected by register-task-definition.
           NEW_TASK_DEF=$(aws ecs describe-task-definition \
             --task-definition "${{ env.TASK_FAMILY_API }}" \
             --query "taskDefinition" \
@@ -116,7 +123,6 @@ jobs:
             "placementConstraints", "compatibilities", "registeredAt", "registeredBy",
           ]:
               td.pop(key, None)
-          # Update only the container named "api" to avoid clobbering sidecars
           for c in td["containerDefinitions"]:
               if c["name"] == "api":
                   import os
@@ -143,8 +149,6 @@ jobs:
           echo "API deployment complete: $NEW_ARN"
 
       # ── Deploy Worker service ───────────────────────────────────────────
-      # Worker uses the same image but different task family.
-      # We do not wait for worker stability — Celery has no readiness concept.
       - name: Deploy Worker service
         env:
           IMAGE: ${{ steps.build.outputs.image }}
