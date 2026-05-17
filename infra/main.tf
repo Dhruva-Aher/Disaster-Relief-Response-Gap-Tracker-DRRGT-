@@ -67,6 +67,17 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw" {
   }
 }
 
+# Explicitly block all public access even though the bucket has no public
+# policy today. Belt-and-suspenders: a future misconfigured bucket policy or
+# ACL can't accidentally expose raw FEMA/Census snapshots to the internet.
+resource "aws_s3_bucket_public_access_block" "raw" {
+  bucket                  = aws_s3_bucket.raw.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
 # ── CloudWatch log groups ─────────────────────────────────────────────────────
 # 14-day retention keeps costs low. CloudWatch Insights queries land here.
 
@@ -246,6 +257,9 @@ resource "aws_db_instance" "postgres" {
   skip_final_snapshot     = true
   publicly_accessible     = false
   backup_retention_period = 7
+  # Prevents accidental deletion via `terraform destroy` or console misclick.
+  # To actually delete the DB, set this to false in a separate apply first.
+  deletion_protection     = true
   tags                    = { Name = "${var.project}-db" }
 }
 
@@ -266,8 +280,11 @@ resource "aws_elasticache_cluster" "redis" {
 # prevent unbounded registry growth.
 
 resource "aws_ecr_repository" "api" {
-  name                 = "${var.project}-api"
-  image_tag_mutability = "MUTABLE"
+  name = "${var.project}-api"
+  # IMMUTABLE prevents pushing a new image with the same tag, so a deployed
+  # SHA tag always refers to exactly one image. With MUTABLE, a broken push
+  # could silently overwrite a tag that's already running in production.
+  image_tag_mutability = "IMMUTABLE"
   image_scanning_configuration { scan_on_push = true }
 }
 
