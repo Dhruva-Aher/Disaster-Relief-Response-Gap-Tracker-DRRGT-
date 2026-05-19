@@ -58,6 +58,18 @@ def income_gap_correlation(db: Session) -> dict:
     if len(d) < 10:
         return {"n": 0, "pearson_r": None, "spearman_r": None, "p_value": None}
 
+    # Compute type-adjusted excess gap.
+    # Each disaster type has a different inherent response timeline — flooding
+    # historically takes longer than wildfire response. Raw gap conflates
+    # "this county was served slowly" with "this disaster type is always slow."
+    # Subtracting the per-type median isolates the county-level deviation.
+    if "incident_type" in d.columns and d["incident_type"].notna().any():
+        type_medians = d.groupby("incident_type")["response_gap_days"].median()
+        d["type_baseline"] = d["incident_type"].map(type_medians)
+        d["excess_gap"] = d["response_gap_days"] - d["type_baseline"]
+    else:
+        d["excess_gap"] = d["response_gap_days"]
+
     # Winsorize both axes before computing correlations
     gap_w    = _winsorize(d["response_gap_days"])
     income_w = _winsorize(d["median_income"])
@@ -67,9 +79,18 @@ def income_gap_correlation(db: Session) -> dict:
     r_p, p_p = stats.pearsonr(log_income, gap_w)
     r_s, p_s = stats.spearmanr(d["median_income"], d["response_gap_days"])
 
+    # Excess-gap correlation: does income predict above-baseline delays?
+    excess_clean = d.dropna(subset=["excess_gap"])
+    if len(excess_clean) >= 10:
+        r_excess, p_excess = stats.spearmanr(
+            excess_clean["median_income"], excess_clean["excess_gap"]
+        )
+    else:
+        r_excess, p_excess = None, None
+
     # Mann-Whitney U: do rural and urban counties have different gap distributions?
-    rural  = d[d["is_rural"] == True]["response_gap_days"]
-    urban  = d[d["is_rural"] == False]["response_gap_days"]
+    rural = d[d["is_rural"] == True]["response_gap_days"]
+    urban = d[d["is_rural"] == False]["response_gap_days"]
     if len(rural) >= 5 and len(urban) >= 5:
         mw_stat, mw_p = stats.mannwhitneyu(rural, urban, alternative="two-sided")
     else:
@@ -79,14 +100,19 @@ def income_gap_correlation(db: Session) -> dict:
     urban_mean = _f(urban.mean()) if not urban.empty else None
 
     return {
-        "n":           int(len(d)),
-        "pearson_r":   _f(r_p),
-        "spearman_r":  _f(r_s),
-        "p_value":     _f(p_s, 6),
-        "rural_mean_gap":  rural_mean,
-        "urban_mean_gap":  urban_mean,
-        "mann_whitney_u":  _f(mw_stat) if mw_stat is not None else None,
-        "mann_whitney_p":  _f(mw_p, 6) if mw_p is not None else None,
+        "n":                  int(len(d)),
+        "pearson_r":          _f(r_p),
+        "spearman_r":         _f(r_s),
+        "p_value":            _f(p_s, 6),
+        # excess_gap_spearman_r: correlation after removing the per-disaster-type
+        # baseline. A stronger signal here means income predicts above-average
+        # delays even after controlling for the type of disaster.
+        "excess_gap_spearman_r": _f(r_excess),
+        "excess_gap_p_value":    _f(p_excess, 6),
+        "rural_mean_gap":     rural_mean,
+        "urban_mean_gap":     urban_mean,
+        "mann_whitney_u":     _f(mw_stat) if mw_stat is not None else None,
+        "mann_whitney_p":     _f(mw_p, 6) if mw_p is not None else None,
     }
 
 
