@@ -38,7 +38,7 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
-    command: celery -A app.worker.celery_app.celery_app worker --beat -l info
+    command: celery -A app.worker.celery_app.celery_app worker --beat --schedule /tmp/celerybeat-schedule -l info
     env_file: .env
     depends_on:
       - api

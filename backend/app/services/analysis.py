@@ -29,13 +29,20 @@ def _load_base(db: Session) -> pd.DataFrame:
     """)
     result = db.execute(sql)
     df = pd.DataFrame(result.fetchall(), columns=result.keys())
-    df["year"] = pd.to_datetime(df.get("declaration_date", pd.NaT), errors="coerce").dt.year
     return df
 
 
 def _winsorize(series: pd.Series, low: float = 0.02, high: float = 0.98) -> pd.Series:
     lo, hi = series.quantile(low), series.quantile(high)
     return series.clip(lo, hi)
+
+
+def _f(v, ndigits: int = 4):
+    """Round a float for JSON output; return None if nan/inf."""
+    if v is None:
+        return None
+    fv = float(v)
+    return round(fv, ndigits) if np.isfinite(fv) else None
 
 
 def income_gap_correlation(db: Session) -> dict:
@@ -65,18 +72,18 @@ def income_gap_correlation(db: Session) -> dict:
     else:
         mw_stat, mw_p = None, None
 
-    rural_mean = float(rural.mean()) if not rural.empty else None
-    urban_mean = float(urban.mean()) if not urban.empty else None
+    rural_mean = _f(rural.mean()) if not rural.empty else None
+    urban_mean = _f(urban.mean()) if not urban.empty else None
 
     return {
         "n":           int(len(d)),
-        "pearson_r":   round(float(r_p), 4),
-        "spearman_r":  round(float(r_s), 4),
-        "p_value":     round(float(p_s), 6),
+        "pearson_r":   _f(r_p),
+        "spearman_r":  _f(r_s),
+        "p_value":     _f(p_s, 6),
         "rural_mean_gap":  rural_mean,
         "urban_mean_gap":  urban_mean,
-        "mann_whitney_u":  float(mw_stat) if mw_stat is not None else None,
-        "mann_whitney_p":  round(float(mw_p), 6) if mw_p is not None else None,
+        "mann_whitney_u":  _f(mw_stat) if mw_stat is not None else None,
+        "mann_whitney_p":  _f(mw_p, 6) if mw_p is not None else None,
     }
 
 
