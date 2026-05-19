@@ -303,16 +303,45 @@ def gap_model(db: Session = Depends(get_db)):
 
 @app.get("/outliers")
 def outliers(top: int = Query(25, ge=1, le=100), db: Session = Depends(get_db)):
-    rows = (db.query(Metric, County)
-              .join(County, County.fips == Metric.county_fips)
-              .order_by(Metric.response_gap_days.desc().nullslast())
-              .limit(top).all())
-    return [{
-        "county": c.name, "state": c.state, "fips": c.fips,
-        "response_gap_days": m.response_gap_days,
-        "median_income": c.median_income, "is_rural": c.is_rural,
-        "disaster_id": m.disaster_id,
-    } for m, c in rows]
+    """
+    Worst counties by average response gap, deduplicated by county.
+
+    Previous version returned one row per metric row, so a county that
+    appeared in many disasters would dominate the table. This query
+    aggregates per county so the top-N list is actually diverse.
+    """
+    key = f"outliers:{top}"
+    hit = cache_svc.get(key)
+    if hit is not None:
+        return hit
+
+    sql = text("""
+        SELECT c.fips, c.name, c.state, c.median_income, c.is_rural,
+               ROUND(AVG(m.response_gap_days)::numeric, 1) AS avg_gap,
+               MAX(m.response_gap_days)                    AS worst_gap,
+               COUNT(*)                                    AS disaster_count
+        FROM metrics m JOIN counties c ON c.fips = m.county_fips
+        WHERE m.response_gap_days BETWEEN 0 AND 730
+        GROUP BY c.fips, c.name, c.state, c.median_income, c.is_rural
+        ORDER BY avg_gap DESC NULLS LAST
+        LIMIT :top
+    """)
+    rows = db.execute(sql, {"top": top}).fetchall()
+    result = [
+        {
+            "county":          r.name,
+            "state":           r.state,
+            "fips":            r.fips,
+            "response_gap_days": float(r.avg_gap),
+            "worst_gap":       int(r.worst_gap),
+            "disaster_count":  int(r.disaster_count),
+            "median_income":   r.median_income,
+            "is_rural":        r.is_rural,
+        }
+        for r in rows
+    ]
+    cache_svc.set(key, result)
+    return result
 
 
 @app.get("/insights")
