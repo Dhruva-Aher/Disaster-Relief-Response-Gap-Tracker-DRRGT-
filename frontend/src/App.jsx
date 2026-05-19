@@ -152,6 +152,50 @@ function Card({ title, subtitle, children, className = "" }) {
   );
 }
 
+function SkeletonChart({ rows = 5 }) {
+  return (
+    <div className="skeleton-wrap" aria-hidden="true">
+      <div className="skeleton-bar-group">
+        {Array.from({ length: rows }).map((_, i) => (
+          <div key={i} className="skeleton-bar-row">
+            <div className="skeleton-label skel" />
+            <div className="skeleton-bar skel" style={{ width: `${45 + (i * 7) % 40}%` }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SkeletonTable({ rows = 6 }) {
+  return (
+    <div className="skeleton-wrap" aria-hidden="true">
+      <div className="skel skeleton-thead" />
+      {Array.from({ length: rows }).map((_, i) => (
+        <div key={i} className="skeleton-row">
+          {[60, 20, 20, 20, 15].map((w, j) => (
+            <div key={j} className="skel" style={{ width: `${w}%`, height: 14, borderRadius: 4 }} />
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ErrorState({ message, onRetry }) {
+  return (
+    <div className="error-state">
+      <div className="error-icon">⚠</div>
+      <div className="error-msg">{message || "Something went wrong."}</div>
+      {onRetry ? (
+        <button className="btn" onClick={onRetry} style={{ marginTop: 12 }}>
+          Retry
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function StatCard({ label, value, sublabel, tone = "warn" }) {
   return (
     <div className={`kpi ${tone}`}>
@@ -161,6 +205,31 @@ function StatCard({ label, value, sublabel, tone = "warn" }) {
       </div>
       <div className="kpi-sublabel">{sublabel}</div>
     </div>
+  );
+}
+
+function TabSkeleton({ tab }) {
+  const chartTabs = ["map", "inequality", "trends"];
+  const tableTabs = ["outliers", "explorer", "insights"];
+  const title = {
+    map: "Response Gap by State",
+    inequality: "Income vs. Response Gap",
+    trends: "Response Gap Over Time",
+    outliers: "Worst Response Gaps",
+    explorer: "County Explorer",
+    insights: "Key Insights",
+  }[tab] || "Loading…";
+
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <div className="skel" style={{ width: 220, height: 18, borderRadius: 4, marginBottom: 8 }} />
+          <div className="skel" style={{ width: 340, height: 13, borderRadius: 4 }} />
+        </div>
+      </div>
+      {chartTabs.includes(tab) ? <SkeletonChart rows={7} /> : <SkeletonTable rows={6} />}
+    </section>
   );
 }
 
@@ -394,10 +463,18 @@ export default function App() {
         ))}
       </nav>
 
-      {error ? <div className="callout blue">{error}</div> : null}
-      {loading ? <div className="callout orange">Loading dashboard data...</div> : null}
+      {error ? (
+        <div className="callout blue" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span>{error}</span>
+          <button className="btn" style={{ flexShrink: 0 }} onClick={() => window.location.reload()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
 
-      <div className="panel">{renderTab()}</div>
+      <div className="panel">
+        {loading ? <TabSkeleton tab={tab} /> : renderTab()}
+      </div>
     </div>
   );
 }
@@ -594,40 +671,58 @@ function OutliersTab({ outliers }) {
   const data = outliers.length
     ? outliers
     : [
-        { county: "Issaquena County", state: "MS", response_gap_days: 187, median_income: 28500, is_rural: true },
-        { county: "Mingo County", state: "WV", response_gap_days: 175, median_income: 31200, is_rural: true },
-        { county: "Clay County", state: "KY", response_gap_days: 168, median_income: 29800, is_rural: true },
-        { county: "Wolfe County", state: "KY", response_gap_days: 162, median_income: 27400, is_rural: true },
-        { county: "McCreary County", state: "KY", response_gap_days: 158, median_income: 29100, is_rural: true },
+        { fips: "28053", county: "Issaquena County", state: "MS", response_gap_days: 187, worst_gap: 214, disaster_count: 3, median_income: 28500, is_rural: true },
+        { fips: "54059", county: "Mingo County",     state: "WV", response_gap_days: 175, worst_gap: 195, disaster_count: 2, median_income: 31200, is_rural: true },
+        { fips: "21051", county: "Clay County",      state: "KY", response_gap_days: 168, worst_gap: 168, disaster_count: 1, median_income: 29800, is_rural: true },
+        { fips: "21237", county: "Wolfe County",     state: "KY", response_gap_days: 162, worst_gap: 178, disaster_count: 2, median_income: 27400, is_rural: true },
+        { fips: "21147", county: "McCreary County",  state: "KY", response_gap_days: 158, worst_gap: 163, disaster_count: 1, median_income: 29100, is_rural: true },
       ];
 
   return (
-    <Card title="Worst Response Gaps" subtitle="Top counties with the longest delays in first aid disbursement.">
+    <Card
+      title="Worst Response Gaps"
+      subtitle="Counties ranked by average days to first aid disbursement, aggregated across all FEMA events."
+    >
       <div className="tbl-scroll">
         <table className="tbl">
           <thead>
             <tr>
               <th>County</th>
               <th>State</th>
-              <th>Gap</th>
+              <th>Avg Gap</th>
+              <th>Worst Event</th>
+              <th>Disasters</th>
               <th>Income</th>
               <th>Type</th>
             </tr>
           </thead>
           <tbody>
             {data.map((o) => (
-              <tr key={`${o.county}-${o.state}`}>
+              <tr key={o.fips || `${o.county}-${o.state}`}>
                 <td><strong>{o.county}</strong></td>
                 <td>{o.state}</td>
                 <td>
-                  <span style={{ color: gapColor(o.response_gap_days), fontWeight: 700 }}>{o.response_gap_days}d</span>
+                  <span style={{ color: gapColor(o.response_gap_days), fontWeight: 700 }}>
+                    {Math.round(o.response_gap_days)}d
+                  </span>
                 </td>
+                <td style={{ color: "#94a3b8", fontSize: 13 }}>
+                  {o.worst_gap != null ? `${o.worst_gap}d` : "—"}
+                </td>
+                <td style={{ color: "#94a3b8", fontSize: 13 }}>{o.disaster_count ?? "—"}</td>
                 <td>{fmtInc(o.median_income)}</td>
-                <td><span className={o.is_rural ? "badge badge-yellow" : "badge badge-blue"}>{o.is_rural ? "Rural" : "Urban"}</span></td>
+                <td>
+                  <span className={o.is_rural ? "badge badge-yellow" : "badge badge-blue"}>
+                    {o.is_rural ? "Rural" : "Urban"}
+                  </span>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
+        {!data.length ? (
+          <div className="empty-state">No outlier data yet. Run the ETL pipeline to populate metrics.</div>
+        ) : null}
       </div>
     </Card>
   );
