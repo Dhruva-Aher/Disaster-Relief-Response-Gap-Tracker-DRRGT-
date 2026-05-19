@@ -23,8 +23,11 @@ _FEMA_REGION: dict[str, int] = {
 def _load_base(db: Session) -> pd.DataFrame:
     sql = text("""
         SELECT m.response_gap_days, m.amount_per_capita,
-               c.median_income, c.income_percentile, c.population, c.is_rural, c.state
-        FROM metrics m JOIN counties c ON c.fips = m.county_fips
+               c.median_income, c.income_percentile, c.population, c.is_rural, c.state,
+               dis.incident_type
+        FROM metrics m
+        JOIN counties  c   ON c.fips = m.county_fips
+        JOIN disasters dis ON dis.id = m.disaster_id
         WHERE m.response_gap_days IS NOT NULL
     """)
     result = db.execute(sql)
@@ -257,6 +260,49 @@ def temporal_trends(db: Session) -> list[dict]:
         }
         for r in rows
     ]
+
+
+def stratified_correlation(db: Session) -> list[dict]:
+    """
+    Spearman ρ between county median income and response gap, computed
+    separately for each FEMA disaster type.
+
+    Motivation: pooling all disaster types in one global correlation masks
+    type-level signals. Flooding disproportionately affects low-income
+    coastal and river-basin counties; wildfires skew toward higher-income
+    western counties. Stratifying removes that confound and surfaces whether
+    the income-delay relationship is consistent or specific to certain events.
+
+    Only types with n >= 30 are included — below that Spearman ρ is unstable.
+    """
+    df = _load_base(db)
+    d = df.dropna(subset=["median_income", "response_gap_days", "incident_type"]).copy()
+    d = d[d["response_gap_days"].between(0, 730)]
+    if d.empty:
+        return []
+
+    out = []
+    for dtype, grp in d.groupby("incident_type"):
+        n = len(grp)
+        if n < 30:
+            continue
+        r_s, p_s = stats.spearmanr(grp["median_income"], grp["response_gap_days"])
+        rural = grp[grp["is_rural"] == True]["response_gap_days"]
+        urban = grp[grp["is_rural"] == False]["response_gap_days"]
+        out.append({
+            "incident_type": str(dtype),
+            "n":             int(n),
+            "spearman_r":    _f(r_s),
+            "p_value":       _f(p_s, 6),
+            "median_gap":    round(float(grp["response_gap_days"].median()), 1),
+            "p25_gap":       round(float(grp["response_gap_days"].quantile(0.25)), 1),
+            "p75_gap":       round(float(grp["response_gap_days"].quantile(0.75)), 1),
+            "rural_median":  _f(rural.median()) if not rural.empty else None,
+            "urban_median":  _f(urban.median()) if not urban.empty else None,
+        })
+
+    # Strongest absolute correlation first so the most informative types lead
+    return sorted(out, key=lambda x: abs(x["spearman_r"] or 0), reverse=True)
 
 
 def multivariable_gap_model(db: Session) -> dict:

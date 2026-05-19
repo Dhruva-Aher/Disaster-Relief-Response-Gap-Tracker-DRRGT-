@@ -20,6 +20,7 @@ from app.services.analysis import (
     income_quintile_analysis,
     disaster_type_analysis,
     regional_equity_analysis,
+    stratified_correlation,
     underserved_counties,
     temporal_trends,
     multivariable_gap_model,
@@ -327,6 +328,20 @@ def trends(db: Session = Depends(get_db)):
         return hit
     result = temporal_trends(db)
     cache_svc.set("trends", result)
+    return result
+
+
+@app.get("/analytics/stratified-correlation")
+def stratified_corr(db: Session = Depends(get_db)):
+    """
+    Spearman ρ between income and response gap, broken down by FEMA disaster type.
+    Surfaces whether the income-delay relationship is stronger for certain event categories.
+    """
+    hit = cache_svc.get("stratified_corr")
+    if hit is not None:
+        return hit
+    result = stratified_correlation(db)
+    cache_svc.set("stratified_corr", result)
     return result
 
 
