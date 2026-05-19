@@ -294,6 +294,28 @@ button { cursor: pointer; }
   color: var(--text-muted);
 }
 
+/* Operational metadata strip */
+.status-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 0;
+  padding: 7px 14px;
+  margin-bottom: 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.status-item { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px; }
+.status-sep { color: var(--border); }
+.status-dot {
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex-shrink: 0;
+}
+.status-dot.green  { background: var(--green); box-shadow: 0 0 4px var(--green); }
+.status-dot.yellow { background: var(--yellow); }
+
 @media (max-width: 900px) {
   .kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ins-grid { grid-template-columns: 1fr; }

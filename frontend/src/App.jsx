@@ -164,6 +164,44 @@ function StatCard({ label, value, sublabel, tone = "warn" }) {
   );
 }
 
+function fmtEtl(ts) {
+  if (!ts) return null;
+  try {
+    const d = new Date(ts);
+    return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return ts;
+  }
+}
+
+function StatusStrip({ status, loading }) {
+  if (loading || !status) return null;
+  const { counts = {}, last_etl, cache } = status;
+  const etlLabel = last_etl ? fmtEtl(last_etl) : "never";
+  const cacheOk = cache === "connected";
+  return (
+    <div className="status-strip">
+      <span className="status-item">
+        <span className="status-dot green" />
+        {(counts.metrics || 0).toLocaleString()} metrics
+      </span>
+      <span className="status-sep">·</span>
+      <span className="status-item">
+        {(counts.counties || 0).toLocaleString()} counties
+      </span>
+      <span className="status-sep">·</span>
+      <span className="status-item">
+        ETL last run: <strong>{etlLabel}</strong>
+      </span>
+      <span className="status-sep">·</span>
+      <span className="status-item">
+        <span className={`status-dot ${cacheOk ? "green" : "yellow"}`} />
+        cache {cache || "unknown"}
+      </span>
+    </div>
+  );
+}
+
 export default function App() {
   const [tab, setTab] = useState("map");
   const [loading, setLoading] = useState(true);
@@ -175,6 +213,7 @@ export default function App() {
   const [countyResults, setCountyResults] = useState([]);
   const [countiesLoading, setCountiesLoading] = useState(false);
   const [error, setError] = useState("");
+  const [svcStatus, setSvcStatus] = useState(null);
 
   useEffect(() => {
     let alive = true;
@@ -182,20 +221,23 @@ export default function App() {
       try {
         setLoading(true);
         setError("");
-        const [metricsRes, timeseriesRes, outliersRes, insightsRes] = await Promise.all([
-          api.metrics("?limit=1000"),
-          api.timeseries(),
-          api.outliers(25),
-          api.insights(),
-        ]);
+        const [metricsRes, timeseriesRes, outliersRes, insightsRes, statusRes] =
+          await Promise.all([
+            api.metrics("?limit=1000"),
+            api.timeseries(),
+            api.outliers(25),
+            api.insights(),
+            api.status().catch(() => null),
+          ]);
         if (!alive) return;
         setMetrics(metricsRes.items || []);
         setTimeseries(timeseriesRes || []);
         setOutliers(outliersRes || []);
         setInsights(insightsRes || FALLBACK.insights);
+        setSvcStatus(statusRes);
       } catch (e) {
         if (!alive) return;
-        setError("Using fallback demo data because the API is not available yet.");
+        setError("Using fallback demo data — API is not reachable.");
         setMetrics([]);
         setTimeseries([]);
         setOutliers([]);
@@ -205,9 +247,7 @@ export default function App() {
       }
     }
     load();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   const counties = useMemo(() => {
@@ -257,7 +297,9 @@ export default function App() {
     return stateAgg[0];
   }, [stateAgg]);
 
-  const representativeCount = metrics.length || counties.length || 4287;
+  // Prefer the authoritative count from /status over the paginated metrics slice.
+  const metricCount = svcStatus?.counts?.metrics || metrics.length || 0;
+  const countyCount = svcStatus?.counts?.counties || 0;
 
   const runSearch = async () => {
     if (!countySearch.trim()) return;
@@ -310,6 +352,8 @@ export default function App() {
         </div>
       </header>
 
+      <StatusStrip status={svcStatus} loading={loading} />
+
       <div className="kpi-grid">
         <StatCard
           label="Avg Response Gap"
@@ -330,9 +374,9 @@ export default function App() {
           tone="good"
         />
         <StatCard
-          label="Records Analyzed"
-          value={representativeCount.toLocaleString()}
-          sublabel="County and disaster records loaded from the backend"
+          label="County-Disaster Pairs"
+          value={metricCount > 0 ? metricCount.toLocaleString() : "—"}
+          sublabel={countyCount > 0 ? `Across ${countyCount.toLocaleString()} counties` : "Metric records computed by pipeline"}
           tone="info"
         />
       </div>
