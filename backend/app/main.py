@@ -124,6 +124,46 @@ def _startup():
     cache_svc.get_cache()
 
 
+@app.get("/status")
+def status(db: Session = Depends(get_db)):
+    """
+    Operational metadata consumed by the frontend status strip.
+    Returns row counts and the timestamp of the last completed ETL run.
+    Kept separate from /health/deep so ALB probes don't trigger the COUNT
+    queries on every health check interval.
+    """
+    try:
+        row = db.execute(text("""
+            SELECT
+                (SELECT COUNT(*) FROM counties)      AS n_counties,
+                (SELECT COUNT(*) FROM disasters)     AS n_disasters,
+                (SELECT COUNT(*) FROM disbursements) AS n_disbursements,
+                (SELECT COUNT(*) FROM metrics)       AS n_metrics
+        """)).fetchone()
+
+        c = cache_svc.get_cache()
+        last_etl = None
+        if c:
+            try:
+                last_etl = c.get("etl:last_run")
+            except Exception:
+                pass
+
+        return {
+            "counts": {
+                "counties":      int(row.n_counties or 0),
+                "disasters":     int(row.n_disasters or 0),
+                "disbursements": int(row.n_disbursements or 0),
+                "metrics":       int(row.n_metrics or 0),
+            },
+            "last_etl":  last_etl,
+            "cache":     "connected" if c else "unavailable",
+        }
+    except Exception as exc:
+        log.warning("status endpoint error", extra={"ctx_err": str(exc)})
+        return {"counts": {}, "last_etl": None, "cache": "unknown"}
+
+
 @app.get("/health")
 def health():
     """Shallow liveness probe — returns 200 if the process is running."""
