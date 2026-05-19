@@ -17,11 +17,12 @@ export async function timed(path) {
 }
 
 export const api = {
-  metrics:      (p = "") => j(`/metrics${p}`),
-  counties:     (q = "")  => j(`/counties${q}`),
-  correlations: ()         => j(`/correlations`),
-  timeseries:   ()         => j(`/timeseries`),
-  outliers:     (n = 25)  => j(`/outliers?top=${n}`),
-  insights:     ()         => j(`/insights`),
-  status:       ()         => j(`/status`),
+  metrics:             (p = "") => j(`/metrics${p}`),
+  counties:            (q = "")  => j(`/counties${q}`),
+  correlations:        ()         => j(`/correlations`),
+  timeseries:          ()         => j(`/timeseries`),
+  outliers:            (n = 25)  => j(`/outliers?top=${n}`),
+  insights:            ()         => j(`/insights`),
+  status:              ()         => j(`/status`),
+  stratifiedCorr:      ()         => j(`/analytics/stratified-correlation`),
 };

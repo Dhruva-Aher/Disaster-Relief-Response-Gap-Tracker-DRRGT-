@@ -280,7 +280,7 @@ def temporal_trends(db: Session) -> list[dict]:
                PERCENTILE_CONT(0.5) WITHIN GROUP
                    (ORDER BY m.response_gap_days)         AS median_gap,
                COUNT(*)                                   AS n,
-               AVG(CASE WHEN c.is_rural THEN m.response_gap_days END)  AS rural_avg,
+               AVG(CASE WHEN c.is_rural THEN m.response_gap_days END)     AS rural_avg,
                AVG(CASE WHEN NOT c.is_rural THEN m.response_gap_days END) AS urban_avg
         FROM metrics m
         JOIN disasters d ON d.id = m.disaster_id
@@ -290,18 +290,37 @@ def temporal_trends(db: Session) -> list[dict]:
         GROUP BY year
         ORDER BY year
     """)
-    result = db.execute(sql)
-    rows = result.fetchall()
+    rows = db.execute(sql).fetchall()
+    if not rows:
+        return []
+
+    df = pd.DataFrame(
+        [(int(r.year), float(r.avg_gap or 0), float(r.median_gap or 0), int(r.n),
+          float(r.rural_avg) if r.rural_avg is not None else None,
+          float(r.urban_avg) if r.urban_avg is not None else None)
+         for r in rows],
+        columns=["year", "avg_gap", "median_gap", "n", "rural_avg", "urban_avg"],
+    )
+
+    # 3-year centered rolling average to smooth year-to-year noise.
+    # Years with few disasters (small n) otherwise move the line as much as
+    # years with hundreds — the rolling window dampens those single-year spikes.
+    # min_periods=1 keeps boundary years rather than dropping them.
+    df["rolling_avg"] = (
+        df["avg_gap"].rolling(window=3, center=True, min_periods=1).mean().round(1)
+    )
+
     return [
         {
-            "year":       int(r.year),
-            "n":          int(r.n),
-            "avg_gap":    round(float(r.avg_gap or 0), 1),
-            "median_gap": round(float(r.median_gap or 0), 1),
-            "rural_avg":  round(float(r.rural_avg), 1) if r.rural_avg is not None else None,
-            "urban_avg":  round(float(r.urban_avg), 1) if r.urban_avg is not None else None,
+            "year":        int(r.year),
+            "n":           int(r.n),
+            "avg_gap":     round(float(r.avg_gap), 1),
+            "median_gap":  round(float(r.median_gap), 1),
+            "rolling_avg": round(float(r.rolling_avg), 1),
+            "rural_avg":   round(float(r.rural_avg), 1) if r.rural_avg is not None else None,
+            "urban_avg":   round(float(r.urban_avg), 1) if r.urban_avg is not None else None,
         }
-        for r in rows
+        for r in df.itertuples()
     ]
 
 

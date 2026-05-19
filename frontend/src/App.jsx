@@ -283,6 +283,7 @@ export default function App() {
   const [countiesLoading, setCountiesLoading] = useState(false);
   const [error, setError] = useState("");
   const [svcStatus, setSvcStatus] = useState(null);
+  const [stratCorr, setStratCorr] = useState([]);
 
   useEffect(() => {
     let alive = true;
@@ -290,13 +291,14 @@ export default function App() {
       try {
         setLoading(true);
         setError("");
-        const [metricsRes, timeseriesRes, outliersRes, insightsRes, statusRes] =
+        const [metricsRes, timeseriesRes, outliersRes, insightsRes, statusRes, stratRes] =
           await Promise.all([
             api.metrics("?limit=1000"),
             api.timeseries(),
             api.outliers(25),
             api.insights(),
             api.status().catch(() => null),
+            api.stratifiedCorr().catch(() => []),
           ]);
         if (!alive) return;
         setMetrics(metricsRes.items || []);
@@ -304,6 +306,7 @@ export default function App() {
         setOutliers(outliersRes || []);
         setInsights(insightsRes || FALLBACK.insights);
         setSvcStatus(statusRes);
+        setStratCorr(stratRes || []);
       } catch (e) {
         if (!alive) return;
         setError("Using fallback demo data — API is not reachable.");
@@ -402,7 +405,7 @@ export default function App() {
       case "outliers":
         return <OutliersTab outliers={outliers} />;
       case "insights":
-        return <Insights insights={insights} metrics={metrics} scatter={scatter} />;
+        return <Insights insights={insights} metrics={metrics} scatter={scatter} stratCorr={stratCorr} />;
       default:
         return null;
     }
@@ -577,23 +580,23 @@ function Inequality({ scatter, metrics }) {
 
 function Trends({ timeseries }) {
   const data = timeseries.length
-    ? timeseries.map((d) => ({ year: d.year, gap: d.avg_gap }))
+    ? timeseries.map((d) => ({ year: d.year, gap: d.avg_gap, rolling: d.rolling_avg, n: d.n }))
     : [
-        { year: 2010, gap: 65 },
-        { year: 2011, gap: 71 },
-        { year: 2012, gap: 68 },
-        { year: 2013, gap: 72 },
-        { year: 2014, gap: 69 },
-        { year: 2015, gap: 84 },
-        { year: 2016, gap: 78 },
-        { year: 2017, gap: 86 },
-        { year: 2018, gap: 75 },
-        { year: 2019, gap: 71 },
-        { year: 2020, gap: 89 },
-        { year: 2021, gap: 83 },
-        { year: 2022, gap: 76 },
-        { year: 2023, gap: 71 },
-        { year: 2024, gap: 68 },
+        { year: 2010, gap: 65, rolling: 66 },
+        { year: 2011, gap: 71, rolling: 68 },
+        { year: 2012, gap: 68, rolling: 70 },
+        { year: 2013, gap: 72, rolling: 70 },
+        { year: 2014, gap: 69, rolling: 75 },
+        { year: 2015, gap: 84, rolling: 77 },
+        { year: 2016, gap: 78, rolling: 83 },
+        { year: 2017, gap: 86, rolling: 80 },
+        { year: 2018, gap: 75, rolling: 77 },
+        { year: 2019, gap: 71, rolling: 78 },
+        { year: 2020, gap: 89, rolling: 81 },
+        { year: 2021, gap: 83, rolling: 83 },
+        { year: 2022, gap: 76, rolling: 79 },
+        { year: 2023, gap: 71, rolling: 73 },
+        { year: 2024, gap: 68, rolling: 70 },
       ];
 
   const avg = data.length ? Math.round(data.reduce((s, d) => s + d.gap, 0) / data.length) : 73;
@@ -601,7 +604,7 @@ function Trends({ timeseries }) {
   return (
     <Card
       title="Response Gap Over Time"
-      subtitle="Average days to first aid disbursement, 2010–2024"
+      subtitle="Average days to first aid disbursement by year, with 3-year rolling average"
     >
       <div className="chart-wrap chart-medium" style={{height:"370px"}}>
         <ResponsiveContainer width="100%" height="100%" minHeight={300}>
@@ -610,12 +613,22 @@ function Trends({ timeseries }) {
             <XAxis dataKey="year" tick={{ fill: "#93a4bf", fontSize: 12 }} />
             <YAxis tick={{ fill: "#93a4bf", fontSize: 12 }} />
             <Tooltip />
-            <Line type="monotone" dataKey="gap" stroke="#f97316" strokeWidth={3} dot={{ r: 3.5, fill: "#f97316" }} />
+            <Legend wrapperStyle={{ color: "#93a4bf", fontSize: 12 }} />
+            <Line
+              type="monotone" dataKey="gap" name="Annual avg"
+              stroke="#f97316" strokeWidth={2} strokeDasharray="4 3"
+              dot={{ r: 2.5, fill: "#f97316" }} opacity={0.6}
+            />
+            <Line
+              type="monotone" dataKey="rolling" name="3-yr rolling avg"
+              stroke="#f97316" strokeWidth={3}
+              dot={false}
+            />
           </LineChart>
         </ResponsiveContainer>
       </div>
       <div className="callout orange">
-        Average over the period: <strong>{avg} days</strong>.
+        Period average: <strong>{avg} days</strong>. Dashed line = annual raw average; solid = 3-year smoothed.
       </div>
     </Card>
   );
@@ -728,7 +741,7 @@ function OutliersTab({ outliers }) {
   );
 }
 
-function Insights({ insights, metrics, scatter }) {
+function Insights({ insights, metrics, scatter, stratCorr }) {
   const stats = insights?.stats || {};
   const r = Number.isFinite(stats.pearson_r) ? stats.pearson_r.toFixed(2) : Number.isFinite(correlation(scatter)) ? correlation(scatter).toFixed(2) : "—";
   const ruralCount = metrics.filter((m) => m.is_rural).length;
@@ -767,12 +780,58 @@ function Insights({ insights, metrics, scatter }) {
       </div>
       <div className="ins-list">
         {(insights?.insights || []).map((msg, idx) => (
-          <div key={idx} className="ins-note">
-            {msg}
-          </div>
+          <div key={idx} className="ins-note">{msg}</div>
         ))}
-        {!insights?.insights?.length ? <div className="empty-state">Run the ETL pipeline to generate more insights.</div> : null}
+        {!insights?.insights?.length ? (
+          <div className="empty-state">Run the ETL pipeline to generate more insights.</div>
+        ) : null}
       </div>
+
+      {stratCorr && stratCorr.length > 0 ? (
+        <div style={{ marginTop: 24 }}>
+          <h3 className="panel-title" style={{ marginBottom: 6 }}>Income–Delay Correlation by Disaster Type</h3>
+          <p className="panel-subtitle" style={{ marginBottom: 12 }}>
+            Spearman ρ between county median income and response gap, computed separately per event category.
+            Negative ρ means higher-income counties received faster aid.
+          </p>
+          <div className="tbl-scroll">
+            <table className="tbl">
+              <thead>
+                <tr>
+                  <th>Disaster Type</th>
+                  <th>n</th>
+                  <th>Spearman ρ</th>
+                  <th>p-value</th>
+                  <th>Median Gap</th>
+                  <th>IQR</th>
+                </tr>
+              </thead>
+              <tbody>
+                {stratCorr.slice(0, 8).map((row) => {
+                  const rho = row.spearman_r;
+                  const rhoColor = rho == null ? "#64748b" : rho < -0.1 ? "#22c55e" : rho > 0.1 ? "#ef4444" : "#94a3b8";
+                  return (
+                    <tr key={row.incident_type}>
+                      <td><strong>{row.incident_type}</strong></td>
+                      <td style={{ color: "#94a3b8", fontSize: 13 }}>{row.n?.toLocaleString()}</td>
+                      <td style={{ color: rhoColor, fontWeight: 600, fontFamily: "var(--font-m)" }}>
+                        {rho != null ? rho.toFixed(3) : "—"}
+                      </td>
+                      <td style={{ color: "#94a3b8", fontSize: 13 }}>
+                        {row.p_value != null ? (row.p_value < 0.001 ? "<0.001" : row.p_value.toFixed(3)) : "—"}
+                      </td>
+                      <td>{row.median_gap != null ? `${row.median_gap}d` : "—"}</td>
+                      <td style={{ color: "#94a3b8", fontSize: 13 }}>
+                        {row.p25_gap != null && row.p75_gap != null ? `${row.p25_gap}–${row.p75_gap}d` : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
     </Card>
   );
 }
