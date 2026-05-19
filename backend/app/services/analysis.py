@@ -133,13 +133,15 @@ def income_quintile_analysis(db: Session) -> list[dict]:
     for label, group in d.groupby("quintile", observed=True):
         gap = group["response_gap_days"]
         income = group["median_income"]
+        p25, p75 = gap.quantile(0.25), gap.quantile(0.75)
         out.append({
             "quintile":        str(label),
             "n":               int(len(group)),
             "median_gap_days": round(float(gap.median()), 1),
             "mean_gap_days":   round(float(gap.mean()), 1),
-            "p25_gap":         round(float(gap.quantile(0.25)), 1),
-            "p75_gap":         round(float(gap.quantile(0.75)), 1),
+            "p25_gap":         round(float(p25), 1),
+            "p75_gap":         round(float(p75), 1),
+            "iqr_gap":         round(float(p75 - p25), 1),
             "median_income":   round(float(income.median()), 0),
             "pct_rural":       round(float(group["is_rural"].mean()) * 100, 1),
         })
@@ -210,14 +212,25 @@ def regional_equity_analysis(db: Session) -> list[dict]:
 
 def underserved_counties(db: Session, top_n: int = 25) -> list[dict]:
     """
-    Composite underserved score = 0.50*z(gap) + 0.30*z(-income) + 0.20*rural.
+    Composite underserved score with disaster-frequency weighting.
 
-    A high score means: long wait for aid AND low income AND likely rural —
-    the triple disadvantage that raw gap rankings miss.
+    Score = 0.45 * z(avg_gap * log1p(n_disasters))
+           + 0.35 * z(-median_income)
+           + 0.20 * is_rural
+
+    Weighting avg_gap by log1p(n_disasters) means a county that consistently
+    waits 120 days across five disasters ranks higher than one with a single
+    120-day event. The log transform dampens the effect so one extra disaster
+    doesn't dominate — it rewards consistent underservice, not outlier events.
+
+    Income weight increased from 0.30 → 0.35 because the gap component now
+    carries more information (disaster frequency), so income needs a slightly
+    larger coefficient to stay proportionally influential.
     """
     sql = text("""
         SELECT m.county_fips, c.name, c.state,
-               AVG(m.response_gap_days)   AS avg_gap,
+               AVG(m.response_gap_days) AS avg_gap,
+               COUNT(*)                 AS n_disasters,
                c.median_income, c.is_rural, c.population
         FROM metrics m JOIN counties c ON c.fips = m.county_fips
         WHERE m.response_gap_days BETWEEN 0 AND 730
@@ -234,22 +247,26 @@ def underserved_counties(db: Session, top_n: int = 25) -> list[dict]:
         std = s.std()
         return (s - s.mean()) / std if std > 0 else pd.Series(0.0, index=s.index)
 
+    # Frequency-weighted gap: rewards counties with consistently long waits
+    df["weighted_gap"] = df["avg_gap"] * np.log1p(df["n_disasters"])
+
     df["score"] = (
-        0.50 * _zscore(df["avg_gap"])
-        + 0.30 * _zscore(-df["median_income"])
+        0.45 * _zscore(df["weighted_gap"])
+        + 0.35 * _zscore(-df["median_income"])
         + 0.20 * df["is_rural"].astype(float)
     )
 
     top = df.nlargest(top_n, "score")
     return [
         {
-            "county_fips":    r.county_fips,
-            "county_name":    r.name,
-            "state":          r.state,
-            "avg_gap_days":   round(float(r.avg_gap), 1),
-            "median_income":  int(r.median_income),
-            "is_rural":       bool(r.is_rural),
-            "population":     int(r.population) if r.population else None,
+            "county_fips":       r.county_fips,
+            "county_name":       r.name,
+            "state":             r.state,
+            "avg_gap_days":      round(float(r.avg_gap), 1),
+            "n_disasters":       int(r.n_disasters),
+            "median_income":     int(r.median_income),
+            "is_rural":          bool(r.is_rural),
+            "population":        int(r.population) if r.population else None,
             "underserved_score": round(float(r.score), 4),
         }
         for r in top.itertuples()
