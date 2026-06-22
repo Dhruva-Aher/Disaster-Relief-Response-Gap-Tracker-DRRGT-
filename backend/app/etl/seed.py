@@ -7,7 +7,7 @@ import random
 from datetime import timedelta
 from pathlib import Path
 from app.core.database import SessionLocal, init_db
-from app.models.db import County, Disaster, Disbursement, AidApproval
+from app.models.db import County, Disaster, Disbursement
 from app.etl.pipeline import upsert_counties, upsert_disasters, compute_metrics
 
 log = logging.getLogger(__name__)
@@ -39,9 +39,6 @@ def seed() -> None:
                 gap = max(3, int(random.gauss(base_gap, 12)))
                 disb_date = d.declaration_date + timedelta(days=gap)
                 amount = random.randint(50_000, 2_000_000)
-                db.add(AidApproval(disaster_id=d.id, county_fips=c.fips,
-                                   approval_date=d.declaration_date + timedelta(days=max(1, gap - 5)),
-                                   amount_approved=amount))
                 db.add(Disbursement(disaster_id=d.id, county_fips=c.fips,
                                     disbursement_date=disb_date, amount_disbursed=amount * 0.9))
                 rows_added += 1

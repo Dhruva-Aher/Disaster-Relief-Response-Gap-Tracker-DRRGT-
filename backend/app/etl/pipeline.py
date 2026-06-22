@@ -52,6 +52,9 @@ def _parse_date(v):
 
 
 def upsert_counties(db: Session, rows: list) -> int:
+    if not rows:
+        log.warning("upsert_counties: received empty rows list — skipping")
+        return 0
     df = pd.DataFrame(rows).dropna(subset=["fips"])
     if df.empty:
         return 0
@@ -116,10 +119,6 @@ def upsert_disasters(db: Session, rows: list) -> int:
 
 
 def upsert_disbursements(db: Session, rows: list) -> int:
-    if not rows:
-        log.warning("upsert_disbursements: no rows supplied, skipping to preserve existing data")
-        return 0
-
     known_fips      = {c.fips for c in db.query(County.fips).all()}
     known_disasters = {d.id   for d in db.query(Disaster.id).all()}
     log.info(
@@ -249,7 +248,7 @@ def run_pipeline() -> None:
     import app.core.logging as _log_cfg
     _log_cfg.configure()
 
-    init_db()
+
     db = SessionLocal()
     try:
         log.info("ETL pipeline start")
@@ -258,20 +257,16 @@ def run_pipeline() -> None:
         n_disb      = upsert_disbursements(db, fetch_fema("PublicAssistanceFundedProjectsDetails"))
         n_metrics   = compute_metrics(db)
 
+        # Compute all analytics and store in DB for the API to serve
+        from app.services.analysis import compute_and_store_analytics
+        from app.etl.insights import precompute_insights
+        
+        compute_and_store_analytics(db)
+        precompute_insights(db)
+
         # Bust all analytics cache keys so the next HTTP request recomputes
         # from fresh data instead of serving yesterday's cached results.
         invalidate_analytics()
-
-        # Record when the pipeline last completed successfully so /status
-        # can surface it in the dashboard. Stored without a version suffix
-        # so it survives cache_version bumps (it's not a derived aggregate).
-        from app.services.cache import get_cache as _get_cache
-        _c = _get_cache()
-        if _c:
-            try:
-                _c.set("etl:last_run", datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"))
-            except Exception:
-                pass
 
         log.info(
             "ETL pipeline complete",
