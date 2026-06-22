@@ -26,7 +26,7 @@ metrics:
     from the leading response_gap_days column.
 """
 from datetime import date, datetime
-from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, JSON, String
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -63,15 +63,6 @@ class Disaster(Base):
     )
 
 
-class AidApproval(Base):
-    __tablename__ = "aid_approvals"
-    id:               Mapped[int]        = mapped_column(Integer, primary_key=True, autoincrement=True)
-    disaster_id:      Mapped[str]        = mapped_column(ForeignKey("disasters.id"), index=True)
-    county_fips:      Mapped[str]        = mapped_column(ForeignKey("counties.fips"), index=True)
-    approval_date:    Mapped[date | None] = mapped_column(Date)
-    amount_approved:  Mapped[float | None] = mapped_column(Float)
-
-
 class Disbursement(Base):
     __tablename__ = "disbursements"
     id:                 Mapped[int]          = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -98,3 +89,30 @@ class Metric(Base):
         Index("ix_metrics_county_disaster", "county_fips", "disaster_id", unique=True),
         Index("ix_metrics_gap_fips", "response_gap_days", "county_fips"),
     )
+
+class AnalyticsCache(Base):
+    __tablename__ = "analytics_cache"
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    data: Mapped[str] = mapped_column(String)  # JSON payload
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+
+
+class CountyInsight(Base):
+    __tablename__ = "county_insights"
+    fips: Mapped[str] = mapped_column(ForeignKey("counties.fips"), primary_key=True)
+    avg_response_gap_days: Mapped[float | None] = mapped_column(Float)
+    national_rank: Mapped[int | None] = mapped_column(Integer)
+    national_percentile: Mapped[float | None] = mapped_column(Float)
+    comparable_counties: Mapped[list | None] = mapped_column(JSON)
+    historical_trend: Mapped[list | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class StateInsight(Base):
+    __tablename__ = "state_insights"
+    state: Mapped[str] = mapped_column(String(2), primary_key=True)
+    avg_response_gap_days: Mapped[float | None] = mapped_column(Float)
+    national_rank: Mapped[int | None] = mapped_column(Integer)
+    historical_trend: Mapped[list | None] = mapped_column(JSON)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
