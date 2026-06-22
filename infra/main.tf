@@ -20,12 +20,6 @@ variable "app_image" {
   default     = "public.ecr.aws/amazonlinux/amazonlinux:latest"
 }
 
-# Leave empty to skip email subscription (SNS topic is always created).
-variable "alert_email" {
-  description = "Email address to receive CloudWatch alarm notifications"
-  default     = ""
-}
-
 # ── Data sources ──────────────────────────────────────────────────────────────
 
 data "aws_caller_identity" "current" {}
@@ -71,17 +65,6 @@ resource "aws_s3_bucket_lifecycle_configuration" "raw" {
     }
     expiration { days = 365 }
   }
-}
-
-# Explicitly block all public access even though the bucket has no public
-# policy today. Belt-and-suspenders: a future misconfigured bucket policy or
-# ACL can't accidentally expose raw FEMA/Census snapshots to the internet.
-resource "aws_s3_bucket_public_access_block" "raw" {
-  bucket                  = aws_s3_bucket.raw.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
 }
 
 # ── CloudWatch log groups ─────────────────────────────────────────────────────
@@ -263,9 +246,6 @@ resource "aws_db_instance" "postgres" {
   skip_final_snapshot     = true
   publicly_accessible     = false
   backup_retention_period = 7
-  # Prevents accidental deletion via `terraform destroy` or console misclick.
-  # To actually delete the DB, set this to false in a separate apply first.
-  deletion_protection     = true
   tags                    = { Name = "${var.project}-db" }
 }
 
@@ -286,11 +266,8 @@ resource "aws_elasticache_cluster" "redis" {
 # prevent unbounded registry growth.
 
 resource "aws_ecr_repository" "api" {
-  name = "${var.project}-api"
-  # IMMUTABLE prevents pushing a new image with the same tag, so a deployed
-  # SHA tag always refers to exactly one image. With MUTABLE, a broken push
-  # could silently overwrite a tag that's already running in production.
-  image_tag_mutability = "IMMUTABLE"
+  name                 = "${var.project}-api"
+  image_tag_mutability = "MUTABLE"
   image_scanning_configuration { scan_on_push = true }
 }
 
@@ -556,21 +533,11 @@ resource "aws_cloudwatch_log_metric_filter" "api_errors" {
   }
 }
 
-# ── SNS alerting ──────────────────────────────────────────────────────────────
-
-resource "aws_sns_topic" "alerts" {
-  name = "${var.project}-alerts"
-}
-
-# Optional email subscription — skipped when alert_email is left empty.
-resource "aws_sns_topic_subscription" "email" {
-  count     = var.alert_email != "" ? 1 : 0
-  topic_arn = aws_sns_topic.alerts.arn
-  protocol  = "email"
-  endpoint  = var.alert_email
-}
-
 # ── CloudWatch alarms ─────────────────────────────────────────────────────────
+# These alarms are wired to no action by default (alarm_actions = []).
+# In a real production system you'd add an SNS topic ARN to alert on-call.
+# Having the alarms defined (even without actions) means they appear on the
+# CloudWatch console and demonstrate operational awareness in interviews.
 
 resource "aws_cloudwatch_metric_alarm" "etl_error_spike" {
   alarm_name          = "${var.project}-etl-error-spike"
@@ -583,8 +550,7 @@ resource "aws_cloudwatch_metric_alarm" "etl_error_spike" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_description   = "ETL worker logged >5 ERROR lines in 5 minutes"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-  ok_actions          = [aws_sns_topic.alerts.arn]
+  alarm_actions       = []
 }
 
 resource "aws_cloudwatch_metric_alarm" "api_p99_latency" {
@@ -598,8 +564,7 @@ resource "aws_cloudwatch_metric_alarm" "api_p99_latency" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_description   = "API p99 response time >2s for 3 consecutive minutes"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-  ok_actions          = [aws_sns_topic.alerts.arn]
+  alarm_actions       = []
   dimensions = {
     LoadBalancer = aws_lb.api.arn_suffix
     TargetGroup  = aws_lb_target_group.api.arn_suffix
@@ -617,8 +582,7 @@ resource "aws_cloudwatch_metric_alarm" "api_5xx_rate" {
   comparison_operator = "GreaterThanThreshold"
   treat_missing_data  = "notBreaching"
   alarm_description   = "API returned >10 5xx errors in 1 minute"
-  alarm_actions       = [aws_sns_topic.alerts.arn]
-  ok_actions          = [aws_sns_topic.alerts.arn]
+  alarm_actions       = []
 }
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
@@ -646,8 +610,4 @@ output "raw_bucket" {
 output "ecs_cluster_name" {
   value       = aws_ecs_cluster.main.name
   description = "ECS cluster name — used by CI/CD deploy step"
-}
-output "alerts_topic_arn" {
-  value       = aws_sns_topic.alerts.arn
-  description = "SNS topic ARN — subscribe additional endpoints via the console"
 }
