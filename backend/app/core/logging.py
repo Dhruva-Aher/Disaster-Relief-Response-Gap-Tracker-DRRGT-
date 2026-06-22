@@ -27,7 +27,7 @@ def configure(level: int = logging.INFO) -> None:
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(level)
-    # Suppress noisy third-party loggers
+    # Suppress noisy third-party loggers that don't add signal
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("botocore").setLevel(logging.WARNING)

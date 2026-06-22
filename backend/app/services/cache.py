@@ -1,16 +1,17 @@
 """
-Redis cache helpers with versioned keys.
+Redis cache helpers.
 
-All keys include a version suffix (key:v1) so bumping cache_version in
-Settings invalidates every key simultaneously without a separate flush.
-
-Redis unavailability is non-fatal: get() returns None so the caller falls
-through to the database, and set() is a no-op. The API continues working
-correctly when Redis is down — it just runs without caching.
+Design decisions:
+- All keys are versioned (key:v2) so bumping cache_version in Settings busts
+  every key simultaneously without a separate flush step.
+- Redis unavailability is non-fatal: get() returns None, set() is a no-op.
+  The API falls through to the database on every cache miss when Redis is down.
+- invalidate_analytics() is called at the end of every ETL run so the first
+  request after a pipeline run recomputes from fresh data.
 """
 import json
 import logging
-from typing import Any
+from typing import Any, Callable
 
 import redis as redis_lib
 
@@ -73,17 +74,24 @@ def invalidate(*keys: str) -> None:
     if not c:
         return
     try:
-        c.delete(*[_vkey(k) for k in keys])
+        versioned = [_vkey(k) for k in keys]
+        c.delete(*versioned)
         log.info("Cache invalidated", extra={"ctx_keys": list(keys)})
     except Exception as exc:
         log.warning("Cache invalidate failed", extra={"ctx_err": str(exc)})
 
 
-# Keys for all analytics endpoints — invalidated together after each ETL run
+# All keys touched by analytics endpoints — invalidated together after each ETL run
 ANALYTICS_KEYS = [
-    "correlations", "timeseries", "insights",
-    "quintiles", "disaster_types", "regional", "underserved:25",
-    "trends", "model", "outliers:25", "stratified_corr",
+    "correlations",
+    "timeseries",
+    "insights",
+    "quintiles",
+    "disaster_types",
+    "regional",
+    "underserved_30",
+    "trends",
+    "model",
 ]
 
 
