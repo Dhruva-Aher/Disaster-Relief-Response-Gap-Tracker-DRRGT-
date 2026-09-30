@@ -72,3 +72,12 @@ Tests: `cd backend && pip install -r requirements.txt && pytest tests/ -v`
 | Placeholder report PNGs | Removed from README — run Compose and capture real screenshots before adding assets |
 
 Do not claim AWS/Terraform production SLAs unless the deploy docs and live URL are current.
+
+---
+
+## For interview depth
+
+| Doc | Use |
+|-----|-----|
+| [docs/METRICS.md](docs/METRICS.md) | Claim ↔ evidence (cross-verified 2026-09-30) |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | Context → Decision → Why → Evidence |
